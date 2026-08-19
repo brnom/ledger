@@ -12,9 +12,9 @@ Balance(account, asOfEffective, asOfRecorded)
 
 Every entry carries two timestamps: when the money moved (*effective*) and when
 the ledger learned of it (*recorded*). A settlement file that arrives three days
-late is recorded today and takes effect three days ago — and the balance the
-ledger reported three days ago does not change. That is the whole idea, and
-everything else in the design follows from making it true.
+late is recorded today and takes effect three days ago. The balance the ledger
+reported three days ago does not change. That is the whole idea, and everything
+else in the design follows from making it true.
 
 > Status: the core is complete and tested — accounts, transactions, reversals,
 > idempotency, bitemporal balances, a hash-chained event log, and stores for
@@ -26,10 +26,10 @@ everything else in the design follows from making it true.
 ## Why
 
 Formance, Blnk, Midaz, TigerBeetle and the rest have double-entry, throughput
-and idempotency well covered. What stays unsolved is the shape of the problem
-in payments: money that has moved but is not yet available, corrections that
-arrive after the report was filed, and an auditor who wants last month's number
-to reproduce exactly.
+and idempotency well covered. What stays unsolved is the shape of the problem in
+payments. Money that has moved but is not yet available. Corrections that arrive
+after the report was filed. An auditor who wants last month's number to
+reproduce exactly.
 
 Four things this is built to do that a single-timestamp ledger cannot:
 
@@ -68,8 +68,8 @@ curl localhost:8080/v1/verify
 ## As a library
 
 The HTTP server is one adapter over the same core. `domain` holds the ledger's
-own vocabulary, `app` the use cases; the rules live below both, so either path
-gets the same guarantees.
+own vocabulary and `app` holds the use cases. The rules live below both, so
+either path gets the same guarantees.
 
 ```go
 store := memstore.New()                  // or pgstore.Open(ctx, dsn)
@@ -140,28 +140,28 @@ cmd/ledgerd                   the server
 The tests are the argument that this works, so they are the part worth reading.
 
 - **Property tests** (`rapid`) drive random command sequences and assert what
-  must hold regardless: every currency sums to zero across the book, no account
-  goes overdrawn without permission, the chain verifies, and — the one that
-  matters most — for *every* prefix of the log, the balance as of that point
+  must hold regardless. Every currency sums to zero across the book. No account
+  goes overdrawn without permission. The chain verifies. And the one that
+  matters most: for *every* prefix of the log, the balance as of that point
   equals the sum of exactly the entries recorded up to it.
 - **A conformance suite** runs the same tests against memstore and PostgreSQL,
   so "the in-memory store is the reference implementation" is checked rather
   than asserted. It has already caught a real difference: SQL `ORDER BY` used
   the database's collation, which orders punctuation differently from Go.
 - **Replay determinism** — folding `Project` over the log reproduces the
-  materialized read model entry for entry. If the two ever disagree, the log
-  has stopped being the source of truth.
-- **Concurrency** — under `-race`, N writers against one account with funds for
-  only 10 of them must let exactly 10 through, and N callers sharing one
-  idempotency key must produce exactly one write.
+  materialized read model entry for entry. If the two ever disagree, the log has
+  stopped being the source of truth.
+- **Concurrency** — under `-race`. N writers against one account with funds for
+  only 10 of them must let exactly 10 through. N callers sharing one idempotency
+  key must produce exactly one write.
 - **Fuzzing** on amount parsing, canonical formatting, and `Allocate`'s
   guarantee that a split never creates or loses a minor unit.
 - **Golden hash tests** pin both hashing schemes: the event chain, and the
   command fingerprint that idempotency is built on. Their failing is the
   intended alarm, not a nuisance to update.
-- **An architecture test** — `make arch` reads the real import graph and fails
-  the build if `domain` ever depends on anything else in the module, or `app`
-  on anything but `domain`.
+- **An architecture test** — `make arch` reads the real import graph. It fails
+  the build if `domain` ever depends on anything else in the module, or if `app`
+  depends on anything but `domain`.
 
 ```bash
 make check              # gofmt, vet, staticcheck, the arch guard, tests under -race
@@ -170,7 +170,7 @@ make prop               # property tests, 10,000 cases
 make fuzz               # every fuzz target
 ```
 
-Statement coverage is 82%; the uncovered remainder is mostly `cmd/ledgerd`
+Statement coverage is 82%. The uncovered remainder is mostly `cmd/ledgerd`
 wiring and error branches that need a database failure to reach.
 
 ## Roadmap
