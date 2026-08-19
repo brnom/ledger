@@ -4,8 +4,8 @@ Status: accepted
 
 ## Context
 
-The project has three goals at once: learn Go properly, be worth showing, and
-be genuinely useful. A framework would work against the first two.
+The project has three goals at once: learn Go properly, be worth showing, and be
+genuinely useful. A framework would work against the first two.
 
 ## Decision
 
@@ -13,7 +13,7 @@ The core `ledger` package imports nothing outside the standard library —
 including its UUIDv7 generation, canonical JSON encoding, and hashing. Beyond
 it:
 
-- `net/http` with the 1.22 routing patterns; no router, no framework.
+- `net/http` with the 1.22 routing patterns. No router, no framework.
 - `pgx/v5` for PostgreSQL, no ORM. Queries are written out.
 - `rapid` for property tests, in test files only.
 

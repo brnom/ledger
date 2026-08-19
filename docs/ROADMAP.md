@@ -5,9 +5,9 @@ what remains, in the order it should be built and with the reason each phase
 comes when it does.
 
 The ordering is not arbitrary. Each phase leans on the bitemporal core rather
-than sitting beside it: forward-dated balances are the effective-time axis
-pointed the other way, holds are a state on entries that already exist,
-reconciliation matches against entries the ledger already indexes. Nothing here
+than sitting beside it. Forward-dated balances are the effective-time axis
+pointed the other way. Holds are a state on entries that already exist.
+Reconciliation matches against entries the ledger already indexes. Nothing here
 requires revisiting phase 1.
 
 ---
@@ -25,8 +25,9 @@ rejects any `effective_at` more than a minute in the future
 
 - Admit future `effective_at` when the ledger opts in via `WithFutureLimit`.
 - Add a `state` to entries: `scheduled` until effective time arrives, then
-  `posted`. Crucially this is a *function of the query time*, not a job — a job
-  may materialise a cache, but correctness must not depend on it having run.
+  `posted`. Crucially this is a *function of the query time*, not a job. A job
+  may materialise a cache, but correctness must not depend on that job having
+  run.
 - `ProjectedBalance(account, until)` — what the balance becomes by a date.
 - `Schedule(account, from, to)` — how much releases per day, which is the
   endpoint a merchant dashboard is built on.
@@ -37,8 +38,8 @@ rejects any `effective_at` more than a minute in the future
 
 - A sale effective in 30 days does not appear in today's balance and does appear
   in `ProjectedBalance(now+30d)`.
-- Passing the release date changes the balance with no job having run — proven
-  with `testing/synctest`, so the test is deterministic and does not sleep.
+- Passing the release date changes the balance with no job having run.
+  `testing/synctest` proves it, so the test is deterministic and does not sleep.
 - The property suite gains: for any date *d*, `ProjectedBalance(d)` equals the
   sum of entries effective at or before *d*. This is the same invariant the
   recorded axis already has, which is why it should be cheap to add.
@@ -47,21 +48,21 @@ rejects any `effective_at` more than a minute in the future
 **Open decisions.**
 
 - Whether `state` is a stored column or derived at query time. Deriving is
-  correct and simpler; storing is faster and can drift. Probably derive, and
-  add a materialised daily rollup only if the numbers demand it.
+  correct and simpler. Storing is faster and can drift. Probably derive, and add
+  a materialised daily rollup only if the numbers demand it.
 - Whether anticipation (*antecipação de recebíveis* — selling future receivables
-  at a discount) belongs here or in its own phase. It is a real product in Brazil
-  and is naturally expressed as a transaction against scheduled entries.
+  at a discount) belongs here or in its own phase. It is a real product in
+  Brazil and is naturally expressed as a transaction against scheduled entries.
 
 ---
 
 ## Phase 3 — Payment lifecycle
 
-**The problem.** Authorisation, partial capture, release, refund and chargeback
-get modelled by hand on top of generic accounts in every system that needs
-them — the same five accounts and the same six transitions, reinvented and
-subtly wrong each time. Held funds are the common case that a plain
-double-entry ledger has no word for.
+**The problem.** Every system that needs authorisation, partial capture,
+release, refund and chargeback models them by hand on top of generic accounts.
+It is the same five accounts and the same six transitions, reinvented and subtly
+wrong each time. Held funds are the common case that a plain double-entry ledger
+has no word for.
 
 **Scope.**
 
@@ -79,29 +80,29 @@ double-entry ledger has no word for.
 - Partial capture splits correctly: captured amount posts, remainder releases,
   and the two sum to the hold.
 - A hold cannot be captured twice, captured beyond its amount, or captured after
-  release — each rejected with its own error, each covered by the property
-  suite's rejection allowlist.
+  release. Each case is rejected with its own error, and each is covered by the
+  property suite's rejection allowlist.
 - Money is conserved across every lifecycle path, which the existing
   conservation property already checks and should keep passing unchanged.
 
 **Open decisions.**
 
 - Whether a hold is an event type or a transaction with a distinguished state.
-  The event type is more explicit; the transaction reuses everything.
+  The event type is more explicit. The transaction reuses everything.
 
 ---
 
 ## Phase 4 — Reconciliation
 
-**The problem.** The daily operational pain, and always outside the ledger:
-matching what the acquirer, bank or PSP says happened against what the ledger
-recorded. The breaks — the rows that do not match — are where money actually
-goes missing.
+**The problem.** The daily operational pain, and always outside the ledger. It
+is the work of matching what the acquirer, bank or PSP says happened against
+what the ledger recorded. The breaks — the rows that do not match — are where
+money actually goes missing.
 
 **Scope.**
 
-- Statement ingestion (CSV and JSON) as an `ExternalStatementIngested` event, so
-  what arrived is itself part of the audit trail and not a side table.
+- Statement ingestion (CSV and JSON) as an `ExternalStatementIngested` event.
+  What arrived is then part of the audit trail itself, not a side table.
 - A matching engine in layers: exact by reference, then by rule with tolerance
   on amount and date, then N:N for aggregated settlements.
 - Automatic suspense accounts for the unmatched, so the book still balances
@@ -119,8 +120,8 @@ goes missing.
 
 **Open decisions.**
 
-- Whether matching writes entries or only annotations. Writing entries makes the
-  ledger reflect reality sooner; annotations keep matching reversible. Likely
+- Whether matching writes entries or only annotations. Written entries make the
+  ledger reflect reality sooner. Annotations keep matching reversible. Likely
   annotations first, entries on confirmation.
 
 ---
@@ -128,8 +129,8 @@ goes missing.
 ## Phase 5 — `ledgerctl` and explainability
 
 **The problem.** Chain verification exists but is only reachable over HTTP.
-Operating a ledger means being able to check its integrity, rebuild a read
-model, and answer "why is this balance what it is" from a terminal.
+Operating a ledger means checking its integrity, rebuilding a read model, and
+answering "why is this balance what it is" from a terminal.
 
 Most of this is already built and merely unexposed — `cmd/ledgerctl/` is an
 empty directory today.
@@ -139,11 +140,12 @@ empty directory today.
 - `ledgerctl verify` — walks the chain, reports the first break. Wraps the
   existing `Ledger.Verify`.
 - `ledgerctl replay` — rebuilds the read model from the log into a fresh schema
-  and diffs it against the live one. The test suite already does this in
-  memory; this makes it an operational tool.
+  and diffs it against the live one. The test suite already does this in memory.
+  The command makes it an operational tool.
 - Drill-down over HTTP: balance → entries → transaction → event, so any number
   can be traced to the facts that produced it.
-- Audit trail export, with the hashes, so a third party can verify independently.
+- Audit trail export, with the hashes, so a third party can verify
+  independently.
 
 **Acceptance.**
 
