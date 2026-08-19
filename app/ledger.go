@@ -45,13 +45,13 @@ func WithClock(now func() time.Time) Option {
 }
 
 // WithBackdateLimit sets how far into the past an entry may be dated.
-func WithBackdateLimit(d time.Duration) Option {
-	return func(ledger *Ledger) { ledger.backdateLimit = d }
+func WithBackdateLimit(limit time.Duration) Option {
+	return func(ledger *Ledger) { ledger.backdateLimit = limit }
 }
 
 // WithFutureLimit sets how far ahead an entry may be dated.
-func WithFutureLimit(d time.Duration) Option {
-	return func(ledger *Ledger) { ledger.futureLimit = d }
+func WithFutureLimit(limit time.Duration) Option {
+	return func(ledger *Ledger) { ledger.futureLimit = limit }
 }
 
 // Open returns a handle on the named ledger in store.
