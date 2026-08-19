@@ -101,8 +101,17 @@ before it.
 - **Stdlib first** ([ADR 0007](docs/adr/0007-stdlib-first.md)): two direct
   dependencies, pgx and rapid. UUIDv7, canonical JSON and hashing are hand-written
   on purpose.
+- **Never commit to `main`.** Every change starts with a feature branch off
+  `main`. Check the current branch before the first commit of any task.
 - **Commits follow Conventional Commits** (`feat(domain):`, `fix(build):`, `test(app):`,
   `docs:`, `ci:`, `chore:`), with a body explaining the reasoning rather than the diff.
+  Keep each commit to one coherent concern, because the history that lands is the
+  history you wrote.
+- **Work lands through a PR, rebase merged.** Open it with `gh pr create` and let
+  the author merge it. Rebase merge, never squash and never a merge commit: `main`
+  stays a linear sequence of individually meaningful commits, so `git log` and
+  `git bisect` keep working. Squashing would collapse a multi-part change into one
+  unreviewable blob.
 - **Docs carry claims that must stay true.** `README.md` states a coverage figure
   and a line count, and `docs/IMPLEMENTED.md` names the file each capability lives
   in. Moving code means updating those.
