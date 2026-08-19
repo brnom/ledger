@@ -59,6 +59,11 @@ jobs:
 
       - run: make lint
 
+      # The layout claim, checked rather than asserted: domain depends on
+      # nothing else in the module, app on nothing but domain.
+      - name: Architecture guard
+        run: make arch
+
       - name: Test with race detector and coverage
         run: make cover
 
