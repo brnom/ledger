@@ -2,9 +2,9 @@
 //
 // It exists so that "the in-memory store is the reference implementation" is a
 // checked claim rather than an intention. The same tests run against memstore
-// and against PostgreSQL, so a difference in how the two interpret a
-// bitemporal bound, a prefix match, or a concurrent write shows up as a
-// failure instead of as a surprise in production.
+// and against PostgreSQL. The two may read a bitemporal bound, a prefix match,
+// or a concurrent write differently. That difference shows up as a failure,
+// not as a surprise in production.
 package storagetest
 
 import (
@@ -54,8 +54,8 @@ type harness struct {
 	ctx    context.Context
 }
 
-// ledgerCounter keeps each test on its own book, so a store shared across
-// tests -- as a real database is -- still gives every test a clean slate.
+// ledgerCounter keeps each test on its own book. A store shared across tests,
+// as a real database is, therefore still gives every test a clean slate.
 var ledgerCounter atomic64
 
 func newHarness(t *testing.T, newStore NewStore) *harness {
@@ -161,9 +161,9 @@ func testAccountPrefix(t *testing.T, newStore NewStore) {
 		prefix domain.AccountName
 		want   []domain.AccountName
 	}{
-		// Sorted by byte value, which is what Go's string comparison does and
-		// what the SQL store pins with COLLATE "C". ':' (0x3a) sorts before
-		// 'X' (0x58), which sorts before '_' (0x5f).
+		// Sorted by byte value, which is what Go's string comparison does and what
+		// the SQL store pins with COLLATE "C". ':' (0x3a) sorts before 'X' (0x58),
+		// which sorts before '_' (0x5f).
 		{"", []domain.AccountName{
 			"assets:cash", "assets:cash:brl", "assets:receivable",
 			"assetsXfrozen:cash", "assets_frozen:cash", "liabilities:users:1",
@@ -175,8 +175,8 @@ func testAccountPrefix(t *testing.T, newStore NewStore) {
 		}},
 		{"assets:cash", []domain.AccountName{"assets:cash", "assets:cash:brl"}},
 		// '_' is a valid character in an account name and a single-character
-		// wildcard in SQL LIKE. If the store forgot to escape it, this prefix
-		// would drag in assetsXfrozen as well.
+		// wildcard in SQL LIKE. If the store forgot to escape it, this prefix would
+		// drag in assetsXfrozen as well.
 		{"assets_frozen", []domain.AccountName{"assets_frozen:cash"}},
 		{"nothing", nil},
 	}
@@ -206,9 +206,9 @@ func names(accts []domain.Account) []domain.AccountName {
 	return out
 }
 
-// testBitemporal is the contract that separates this ledger from a
-// single-axis one: a fact recorded now can take effect in the past without
-// changing what the ledger reported before it arrived.
+// testBitemporal is the contract that separates this ledger from a single-axis
+// one. A fact recorded now can take effect in the past. What the ledger
+// reported before that fact arrived does not change.
 func testBitemporal(t *testing.T, newStore NewStore) {
 	h := newHarness(t, newStore)
 	h.open("equity:opening-balances", true)
@@ -536,7 +536,7 @@ func testChainVerifies(t *testing.T, newStore NewStore) {
 }
 
 // testReplayMatchesReadModel is the property that keeps the event log
-// authoritative. It matters most here, against a real database: an event that
+// authoritative. It matters most here, against a real database. An event that
 // survives a storage round trip must hash the same and project the same
 // entries as when it was written.
 func testReplayMatchesReadModel(t *testing.T, newStore NewStore) {
@@ -572,9 +572,9 @@ func testReplayMatchesReadModel(t *testing.T, newStore NewStore) {
 	}
 	var replayed []domain.Entry
 	for _, e := range events {
-		// The hash is recomputed from what came back out of storage. If the
-		// payload bytes or the timestamp were altered in transit -- by jsonb
-		// normalizing keys, or by a precision mismatch -- this is where it
+		// The hash is recomputed from what came back out of storage. Storage may
+		// alter the payload bytes or the timestamp in transit, through jsonb
+		// normalizing keys or through a precision mismatch. This is where that
 		// shows.
 		if err := e.Verify(); err != nil {
 			t.Fatalf("event %d did not survive storage: %v", e.Seq, err)

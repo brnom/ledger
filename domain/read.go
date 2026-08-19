@@ -2,15 +2,15 @@ package domain
 
 import "time"
 
-// Entry is one posting as recorded in the read model: the flattened,
-// queryable form of a leg of a committed transaction.
+// Entry is one posting as recorded in the read model: the flattened, queryable
+// form of a leg of a committed transaction.
 //
 // Entries are what balance queries scan. They are derived from events and can
-// always be rebuilt from them, which is what makes a replay a safe operation
+// always be rebuilt from them. That is what makes a replay a safe operation
 // rather than a leap of faith.
 type Entry struct {
-	// Seq is the event that recorded this entry. It is the entry's position
-	// on the recorded-time axis.
+	// Seq is the event that recorded this entry. It is the entry's position on
+	// the recorded-time axis.
 	Seq int64
 	// Index is the posting's position within its transaction, so the original
 	// order of legs survives into the read model.
@@ -38,8 +38,8 @@ type Entry struct {
 type BalanceQuery struct {
 	Account AccountName
 
-	// AsOfEffective counts only entries effective at or before this instant.
-	// It answers "what is the balance on this date".
+	// AsOfEffective counts only entries effective at or before this instant. It
+	// answers "what is the balance on this date".
 	AsOfEffective time.Time
 
 	// AsOfRecorded counts only entries recorded at or before this instant, and
@@ -56,8 +56,8 @@ type BalanceQuery struct {
 // EntryQuery selects entries for listing. Bounds follow the same convention as
 // [BalanceQuery]: the zero value of a field means unbounded.
 type EntryQuery struct {
-	// Account matches one account exactly; AccountPrefix matches a whole
-	// subtree of the account hierarchy. Setting both is an error.
+	// Account matches one account exactly. AccountPrefix matches a whole subtree
+	// of the account hierarchy. Setting both is an error.
 	Account       AccountName
 	AccountPrefix AccountName
 
@@ -67,8 +67,8 @@ type EntryQuery struct {
 	RecordedFrom, RecordedTo   time.Time
 	FromSeq, ToSeq             int64
 
-	// Limit caps the number of entries returned; zero means the store's
-	// default. Entries come back ordered by (Seq, Index).
+	// Limit caps the number of entries returned. Zero means the store's default.
+	// Entries come back ordered by (Seq, Index).
 	Limit int
 	// AfterSeq and AfterIndex continue a previous page.
 	AfterSeq   int64
@@ -80,10 +80,10 @@ type EntryQuery struct {
 type IdempotencyRecord struct {
 	Key string
 
-	// RequestHash fingerprints the command the key was first used with.
-	// Replaying the key with a different command is a caller bug -- two
-	// different payments sharing a key -- and must be reported, not silently
-	// answered with the first result.
+	// RequestHash fingerprints the command the key was first used with. A replay
+	// of the key with a different command is a caller bug, such as two different
+	// payments that share a key. The ledger reports it. It does not answer with
+	// the first result.
 	RequestHash [32]byte
 
 	Seq        int64
@@ -108,8 +108,8 @@ type RecordedTransaction struct {
 
 	// Reverts names the transaction this one undoes, if it is a reversal.
 	Reverts ID
-	// RevertedBy names the transaction that undid this one, if any. A
-	// transaction can be reverted at most once; a second correction has to be
-	// a new transaction, so the audit trail stays a chain rather than a set.
+	// RevertedBy names the transaction that undid this one, if any. A transaction
+	// can be reverted at most once. A second correction has to be a new
+	// transaction, so the audit trail stays a chain rather than a set.
 	RevertedBy ID
 }

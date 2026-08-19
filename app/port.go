@@ -9,13 +9,14 @@ import (
 // Store persists a ledger's events and the read model projected from them.
 //
 // Writes go through [Store.Update], which gives the caller a [Writer] holding
-// the ledger's single-writer lock. Everything the engine needs to validate a
-// command is readable through that Writer, so validation and append happen in
-// one transaction and no other writer can slip between them.
+// the ledger's single-writer lock. Everything the engine needs in order to
+// validate a command is readable through that Writer. Validation and append
+// therefore happen in one transaction, and no other writer can come between
+// them.
 type Store interface {
 	// Update runs fn as the sole writer of the given ledger. Events staged
-	// through the Writer are committed atomically with their projections when
-	// fn returns nil, and discarded entirely when it returns an error.
+	// through the Writer are committed atomically with their projections when fn
+	// returns nil, and discarded entirely when it returns an error.
 	Update(ctx context.Context, ledgerID string, fn func(context.Context, Writer) error) error
 
 	// Head returns the end of the stream.
@@ -24,11 +25,11 @@ type Store interface {
 	// Account returns one account, or [domain.ErrAccountNotFound].
 	Account(ctx context.Context, ledgerID string, name domain.AccountName) (domain.Account, error)
 
-	// Accounts lists accounts under a prefix; an empty prefix lists all.
+	// Accounts lists accounts under a prefix. An empty prefix lists all of them.
 	Accounts(ctx context.Context, ledgerID string, prefix domain.AccountName) ([]domain.Account, error)
 
 	// Balance sums the entries a query selects. The result is signed and
-	// debit-positive; use [domain.Account.Presented] to show it the account's
+	// debit-positive. Use [domain.Account.Presented] to show it the account's
 	// way.
 	Balance(ctx context.Context, ledgerID string, query domain.BalanceQuery) (domain.Amount, error)
 
@@ -38,8 +39,7 @@ type Store interface {
 	// Transaction returns one transaction, or [domain.ErrTransactionNotFound].
 	Transaction(ctx context.Context, ledgerID string, id domain.ID) (domain.RecordedTransaction, error)
 
-	// Events reads the raw log from fromSeq, for chain verification and
-	// replay.
+	// Events reads the raw log from fromSeq, for chain verification and replay.
 	Events(ctx context.Context, ledgerID string, fromSeq int64, limit int) ([]domain.Event, error)
 
 	// Close releases resources held by the store.
@@ -70,8 +70,8 @@ type Writer interface {
 	// Idempotency returns what a key produced before, if anything.
 	Idempotency(key string) (domain.IdempotencyRecord, bool, error)
 
-	// Stage seals an event onto the end of the stream and records the entries
-	// it projects. Nothing is durable until Update's callback returns nil.
+	// Stage seals an event onto the end of the stream and records the entries it
+	// projects. Nothing is durable until Update's callback returns nil.
 	Stage(event *domain.Event) error
 
 	// StageIdempotency records the outcome of a keyed command.

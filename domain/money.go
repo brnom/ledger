@@ -12,26 +12,26 @@ import (
 // MaxScale is the largest number of decimal digits a [Currency] may declare.
 const MaxScale = 18
 
-// Currency identifies a unit of account together with the scale its minor
-// units are expressed in: BRL has scale 2 (centavos), JPY has scale 0, BTC has
-// scale 8 (satoshis).
+// Currency identifies a unit of account together with the scale of its minor
+// units. BRL has scale 2 (centavos), JPY has scale 0, and BTC has scale 8
+// (satoshis).
 //
 // Currency is comparable, so it works as a map key. Two currencies with the
-// same code but different scales are different currencies; the ledger refuses
-// to mix them rather than silently rescaling.
+// same code but different scales are different currencies. The ledger refuses
+// to mix them rather than rescale them silently.
 type Currency struct {
 	Code  string
 	Scale uint8
 }
 
 // knownCurrencies maps a code to its conventional scale. It is deliberately
-// short: it exists to stop the same code being used with two different scales
-// in one deployment, not to be an exhaustive ISO 4217 table. Anything missing
+// short. It exists to stop one deployment from using the same code with two
+// different scales. It is not an exhaustive ISO 4217 table. Anything missing
 // can still be built with [NewCurrency].
 //
 // Assets with very high precision are omitted on purpose. An [Amount] holds
-// int64 minor units, so scale 18 caps a value at roughly 9.2 units — too low
-// to be useful for, say, wei-denominated ETH.
+// int64 minor units, so scale 18 caps a value at roughly 9.2 units. That is
+// too low to be useful for wei-denominated ETH.
 var knownCurrencies = map[string]uint8{
 	"ARS": 2, "AUD": 2, "BRL": 2, "CAD": 2, "CHF": 2, "CLP": 0,
 	"COP": 2, "EUR": 2, "GBP": 2, "JPY": 0, "KRW": 0, "MXN": 2,
@@ -105,7 +105,7 @@ func (c Currency) String() string { return c.Code }
 // operation that could leave that range returns [ErrOverflow] instead of
 // wrapping.
 //
-// The zero Amount has the zero Currency and is not usable in arithmetic; build
+// The zero Amount has the zero Currency and is not usable in arithmetic. Build
 // values with [FromMinor], [Zero], or [ParseAmount].
 type Amount struct {
 	minor int64
@@ -216,7 +216,7 @@ func (a Amount) Equal(b Amount) bool { return a == b }
 
 // Allocate splits a across len(ratios) parts in proportion to ratios,
 // distributing the indivisible remainder by the largest-remainder method. The
-// parts always sum back to a exactly: no minor unit is created or lost, which
+// parts always sum back to a exactly. No minor unit is created or lost, which
 // is what a payment split or a fee breakdown requires.
 //
 // Ratios must be non-negative and sum to a positive value.
@@ -235,9 +235,9 @@ func (a Amount) Allocate(ratios []int64) ([]Amount, error) {
 		return nil, fmt.Errorf("%w: ratios sum to zero", ErrInvalidAmount)
 	}
 
-	// Work on the magnitude so that truncation rounds consistently toward
-	// zero, then restore the sign. Taking the magnitude in big.Int keeps
-	// math.MinInt64 representable.
+	// Work on the magnitude so that truncation rounds consistently toward zero,
+	// then restore the sign. Taking the magnitude in big.Int keeps math.MinInt64
+	// representable.
 	mag := new(big.Int).Abs(big.NewInt(a.minor))
 	neg := a.minor < 0
 
@@ -258,8 +258,8 @@ func (a Amount) Allocate(ratios []int64) ([]Amount, error) {
 		parts[i] = part{idx: i, remainder: rem}
 	}
 
-	// Hand the leftover units to the largest remainders, breaking ties by
-	// index so the result is deterministic and replayable.
+	// Hand the leftover units to the largest remainders, breaking ties by index
+	// so the result is deterministic and replayable.
 	leftover := new(big.Int).Sub(mag, assigned).Int64()
 	sort.SliceStable(parts, func(i, j int) bool {
 		if cmp := parts[i].remainder.Cmp(parts[j].remainder); cmp != 0 {
@@ -312,8 +312,8 @@ func (a Amount) String() string { return a.Format() + " " + a.cur.Code }
 // fraction digits.
 //
 // More fraction digits than the currency has is an error, not a rounding
-// opportunity: silently dropping a digit is how money goes missing, so the
-// caller has to decide how to round.
+// opportunity. A silently dropped digit is how money goes missing, so the
+// caller decides how to round.
 func ParseAmount(cur Currency, text string) (Amount, error) {
 	if err := cur.Validate(); err != nil {
 		return Amount{}, err

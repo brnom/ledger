@@ -224,8 +224,8 @@ func TestOpenAccountTwiceIsAnError(t *testing.T) {
 }
 
 // An account may not be opened outside the window of business time the ledger
-// accepts, for the same reason an entry may not: a balance dated before the
-// account existed is not a balance anyone can reproduce.
+// accepts. An entry may not either, and for the same reason. Nobody can
+// reproduce a balance dated before the account existed.
 func TestEffectiveWindow(t *testing.T) {
 	fix := newFixture(t, app.WithBackdateLimit(time.Hour), app.WithFutureLimit(time.Minute))
 
@@ -353,9 +353,9 @@ func TestCommitRejects(t *testing.T) {
 	}
 }
 
-// An account that is allowed to go negative is how the rest of the world is
-// modelled: a clearing account holds no funds of its own and goes negative
-// while money is in flight. The account being funded from it may not.
+// An account that is allowed to go negative is how the ledger models the rest
+// of the world. A clearing account holds no funds of its own, and it goes
+// negative while money is in flight. The account being funded from it may not.
 func TestCommitAllowsNegativeWhenPermitted(t *testing.T) {
 	fix := newFixture(t)
 	fix.open("liabilities:clearing", domain.Credit, true)
@@ -372,8 +372,8 @@ func TestCommitAllowsNegativeWhenPermitted(t *testing.T) {
 		t.Errorf("user balance = %d, want 500", got)
 	}
 
-	// The same movement in the other direction is refused, because that
-	// account was opened without permission to go past zero.
+	// The same movement in the other direction is refused, because that account
+	// was opened without permission to go past zero.
 	_, err := fix.ledger.Commit(fix.ctx, app.CommitCommand{Postings: []domain.Posting{
 		domain.Dr("liabilities:users:1", domain.FromMinor(brl, 501)),
 		domain.Cr("liabilities:clearing", domain.FromMinor(brl, 501)),
@@ -383,9 +383,9 @@ func TestCommitAllowsNegativeWhenPermitted(t *testing.T) {
 	}
 }
 
-// The overdraft check is made against the transaction's net effect on each
-// account, not against each leg in turn, or a transaction that takes and
-// returns within itself would be refused.
+// The overdraft check runs against the transaction's net effect on each
+// account, not against each leg in turn. A check per leg would refuse a
+// transaction that takes and returns within itself.
 func TestCommitNetsPostingsPerAccount(t *testing.T) {
 	fix := newFixture(t)
 	fix.funded("liabilities:users:1", 100)
@@ -457,8 +457,9 @@ func TestIdempotentRetryDoesNotWriteTwice(t *testing.T) {
 }
 
 // The fingerprint must cover what the caller sent, not what the ledger filled
-// in. Neither the transaction id nor the effective time is supplied here, so
-// both are generated -- and a retry a minute later still has to match.
+// in. The caller supplies neither the transaction id nor the effective time
+// here, so the ledger generates both. A retry a minute later still has to
+// match.
 func TestIdempotencyIgnoresGeneratedValues(t *testing.T) {
 	fix := newFixture(t)
 	fix.funded("liabilities:users:1", 10000)
@@ -608,8 +609,8 @@ func TestRevertRejects(t *testing.T) {
 	if _, err := fix.ledger.Revert(fix.ctx, app.RevertCommand{TransactionID: paid.TransactionID}); err != nil {
 		t.Fatalf("Revert: %v", err)
 	}
-	// A second correction has to be a new transaction, so the audit trail
-	// stays a chain rather than a set.
+	// A second correction has to be a new transaction, so the audit trail stays a
+	// chain rather than a set.
 	if _, err := fix.ledger.Revert(fix.ctx, app.RevertCommand{TransactionID: paid.TransactionID}); !errors.Is(err, domain.ErrAlreadyReverted) {
 		t.Errorf("Revert(twice) = %v, want ErrAlreadyReverted", err)
 	}
@@ -636,7 +637,7 @@ func TestRevertIsIdempotent(t *testing.T) {
 	}
 }
 
-// A debit account reads as it is stored; a credit account reads inverted. This
+// A debit account reads as it is stored. A credit account reads inverted. This
 // is the only place presentation happens, and it is why balances can be held
 // signed everywhere else.
 func TestPresentedBalance(t *testing.T) {
@@ -721,9 +722,10 @@ func TestVerify(t *testing.T) {
 	}
 }
 
-// The lock the store takes per ledger is what makes this safe; the engine's
-// part is to read the balance inside it. N callers may spend from an account
-// that can fund only some of them, and exactly that many must get through.
+// The lock the store takes per ledger is what makes this safe. The engine's
+// part is to read the balance inside that lock. N callers may spend from an
+// account that can fund only some of them, and exactly that many must get
+// through.
 func TestConcurrentSpendersCannotOverdraw(t *testing.T) {
 	fix := newFixture(t)
 	fix.funded("liabilities:users:1", 1000)

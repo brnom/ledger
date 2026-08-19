@@ -1,9 +1,9 @@
 // Package memstore keeps a ledger entirely in memory.
 //
-// It is the reference implementation of [app.Store]: small enough to read
-// in one sitting, and the yardstick the PostgreSQL store is tested against. It
-// is also what makes the domain testable without a database, so the rules that
-// matter can be exercised at the speed of a unit test.
+// It is the reference implementation of [app.Store]: small enough to read in
+// one sitting, and the yardstick the PostgreSQL store is tested against. It is
+// also what makes the domain testable without a database. The rules that
+// matter run at the speed of a unit test.
 //
 // It is safe for concurrent use and durable for exactly as long as the process
 // lives.
@@ -22,8 +22,7 @@ import (
 // DefaultEntryLimit caps a page of entries when a query does not say.
 const DefaultEntryLimit = 1000
 
-// Store is an in-memory [app.Store]. The zero value is not usable; call
-// [New].
+// Store is an in-memory [app.Store]. The zero value is not usable. Call [New].
 type Store struct {
 	mu    sync.Mutex
 	books map[string]*book
@@ -34,9 +33,9 @@ func New() *Store {
 	return &Store{books: make(map[string]*book)}
 }
 
-// book is one ledger's state. Its mutex is the single-writer lock: the
-// PostgreSQL store takes an advisory lock for the same reason, so that a
-// command reads state and appends against it with nothing in between.
+// book is one ledger's state. Its mutex is the single-writer lock. The
+// PostgreSQL store takes a row lock for the same reason. A command reads state
+// and appends against it with nothing in between.
 type book struct {
 	mu sync.RWMutex
 
@@ -139,8 +138,8 @@ func (s *Store) Transaction(ctx context.Context, ledgerID string, id domain.ID) 
 	return tx, nil
 }
 
-// Balance implements [app.Store]. It sums the entries the query selects
-// along both time axes.
+// Balance implements [app.Store]. It sums the entries the query selects along
+// both time axes.
 func (s *Store) Balance(ctx context.Context, ledgerID string, query domain.BalanceQuery) (domain.Amount, error) {
 	bk := s.book(ledgerID)
 	bk.mu.RLock()
@@ -169,8 +168,8 @@ func matchesBalanceQuery(entry domain.Entry, query domain.BalanceQuery) bool {
 	if !query.AsOfEffective.IsZero() && entry.EffectiveAt.After(query.AsOfEffective) {
 		return false
 	}
-	// A sequence bound is exact, so it wins over a timestamp bound: several
-	// events can share a recorded time, but only one can have a given Seq.
+	// A sequence bound is exact, so it wins over a timestamp bound. Several
+	// events can share a recorded time. Only one can have a given Seq.
 	if query.AsOfSeq > 0 {
 		return entry.Seq <= query.AsOfSeq
 	}
@@ -250,8 +249,8 @@ func (s *Store) Events(ctx context.Context, ledgerID string, fromSeq int64, limi
 		return nil, nil
 	}
 	end := min(int64(len(bk.events)), fromSeq-1+int64(limit))
-	// Events are immutable, so handing out a copy of the slice header over
-	// shared backing memory is safe as long as callers do not write to it.
+	// Events are immutable. A copy of the slice header over shared backing memory
+	// is therefore safe, as long as callers do not write to it.
 	out := make([]domain.Event, end-fromSeq+1)
 	copy(out, bk.events[fromSeq-1:end])
 	return out, nil
@@ -414,8 +413,8 @@ func (w *writer) commit() {
 		if !ok {
 			current = domain.Zero(delta.Currency())
 		}
-		// Overflow was already ruled out when the delta was staged against
-		// this same balance.
+		// Overflow was already ruled out when the delta was staged against this same
+		// balance.
 		next, _ := current.Add(delta)
 		bk.balances[name] = next
 	}

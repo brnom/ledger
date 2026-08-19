@@ -94,9 +94,8 @@ func (s *Store) Migrate(ctx context.Context) error {
 		if applied[mig.name] {
 			continue
 		}
-		// Each migration is its own transaction, so a failure halfway through
-		// the set leaves the schema at the last complete step rather than in
-		// an unnamed state.
+		// Each migration is its own transaction. A failure halfway through the set
+		// leaves the schema at the last complete step, not in an unnamed state.
 		err := pgx.BeginFunc(ctx, conn, func(tx pgx.Tx) error {
 			if _, err := tx.Exec(ctx, mig.sql); err != nil {
 				return err

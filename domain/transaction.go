@@ -16,10 +16,9 @@ const (
 // Posting is one leg of a transaction: a signed movement against an account.
 //
 // The sign carries the accounting direction. A positive amount is a debit, a
-// negative amount is a credit. Keeping one signed number rather than a
-// magnitude plus a direction flag means a transaction balances exactly when
-// its postings sum to zero, which is a single addition rather than a case
-// analysis.
+// negative amount is a credit. One signed number, rather than a magnitude plus
+// a direction flag, means a transaction balances exactly when its postings sum
+// to zero. That is a single addition rather than a case analysis.
 type Posting struct {
 	Account AccountName
 	Amount  Amount
@@ -52,8 +51,8 @@ func (p Posting) Validate() error {
 		return fmt.Errorf("%w: posting to %q has a zero amount", ErrInvalidTransaction, p.Account)
 	}
 	if p.Amount.Minor() == math.MinInt64 {
-		// Excluded so that negating a posting -- which reversal does to every
-		// leg -- can never overflow.
+		// Excluded so that negating a posting -- which reversal does to every leg --
+		// can never overflow.
 		return fmt.Errorf("%w: posting to %q is not reversible at %s",
 			ErrInvalidTransaction, p.Account, p.Amount)
 	}
@@ -75,10 +74,10 @@ type Transaction struct {
 	// naturally by when they were created.
 	ID ID
 
-	// EffectiveAt is when the transaction takes effect in business time --
-	// when the money is considered to have moved. It is independent of when
-	// the ledger recorded it, which is what makes backdated corrections and
-	// forward-dated settlement possible without rewriting history.
+	// EffectiveAt is when the transaction takes effect in business time -- when
+	// the money is considered to have moved. It is independent of when the ledger
+	// recorded it, which is what makes backdated corrections and forward-dated
+	// settlement possible without rewriting history.
 	EffectiveAt time.Time
 
 	Postings []Posting
@@ -101,8 +100,8 @@ func NewTransfer(from, to AccountName, amount Amount, effectiveAt time.Time) Tra
 }
 
 // Validate enforces the double-entry rules that make a transaction admissible.
-// It checks shape only; whether the accounts exist and have room for the
-// postings is the engine's business, since that needs the ledger's state.
+// It checks shape only. Whether the accounts exist and have room for the
+// postings is the engine's business, because that needs the ledger's state.
 func (tx Transaction) Validate() error {
 	switch {
 	case tx.ID.IsZero():
@@ -133,8 +132,8 @@ func (tx Transaction) Validate() error {
 		return err
 	}
 	// Each currency balances on its own. A transaction that moves BRL and USD
-	// must balance both, which forces an FX position account to be named
-	// rather than letting an implicit rate hide inside the entry.
+	// must balance both. That forces the caller to name an FX position account
+	// rather than hide an implicit rate inside the entry.
 	for _, cur := range sortedCurrencies(sums) {
 		if sum := sums[cur]; !sum.IsZero() {
 			return fmt.Errorf("%w: transaction %s does not balance in %s, off by %s",
@@ -192,8 +191,8 @@ func (tx Transaction) Accounts() []AccountName {
 // signs flipped, effective at the given time.
 //
 // A reversal is a new transaction, never an edit. The original stays in the
-// book exactly as it was recorded, which is the difference between a ledger
-// that can be audited and one that can only be trusted.
+// book exactly as it was recorded. That is the difference between a ledger you
+// can audit and one you can only trust.
 func (tx Transaction) Reverse(id ID, effectiveAt time.Time) Transaction {
 	postings := make([]Posting, len(tx.Postings))
 	for i, posting := range tx.Postings {

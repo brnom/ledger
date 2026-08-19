@@ -12,7 +12,7 @@ import (
 )
 
 // EventType names a kind of fact the ledger records. Types are strings on the
-// wire and in storage so that a reader written today can skip an event kind
+// wire and in storage. A reader written today can therefore skip an event kind
 // added tomorrow instead of failing to parse the stream.
 type EventType string
 
@@ -26,10 +26,10 @@ const (
 // MaxIdempotencyKeyLen bounds a caller-supplied idempotency key.
 const MaxIdempotencyKeyLen = 255
 
-// hashDomain separates this ledger's hashes from any other use of SHA-256,
-// and pins the hashing scheme to a version. Changing how events are hashed
-// means changing this string, which makes the break explicit rather than
-// silently invalidating every chain in storage.
+// hashDomain separates this ledger's hashes from any other use of SHA-256, and
+// pins the hashing scheme to a version. Changing how events are hashed means
+// changing this string, which makes the break explicit rather than silently
+// invalidating every chain in storage.
 const hashDomain = "ledger.event.v1"
 
 // Payload is the typed body of an event.
@@ -41,9 +41,9 @@ type Payload interface {
 }
 
 // PostingWire is a posting in its stored form. Amounts travel as decimal
-// strings with their currency and scale alongside: a JSON number would invite
-// a float somewhere down the line, and a bare minor-unit integer would be
-// meaningless if the currency's scale were ever misread.
+// strings with their currency and scale alongside. A JSON number would invite
+// a float somewhere down the line. A bare minor-unit integer would be
+// meaningless if a reader misread the currency's scale.
 type PostingWire struct {
 	Account  AccountName `json:"account"`
 	Amount   string      `json:"amount"`
@@ -67,8 +67,8 @@ func (AccountOpened) EventType() EventType { return EventAccountOpened }
 
 // Validate implements [Payload].
 func (opened AccountOpened) Validate() error {
-	// Check the name before rebuilding the account so a bad name is reported
-	// as such rather than as whatever the reconstruction trips over first.
+	// Check the name before rebuilding the account so a bad name is reported as
+	// such rather than as whatever the reconstruction trips over first.
 	if err := opened.Name.Validate(); err != nil {
 		return err
 	}
@@ -166,7 +166,7 @@ func NewTransactionCommitted(tx Transaction) (TransactionCommitted, error) {
 }
 
 // TransactionReverted records the compensating transaction that undoes an
-// earlier one. The original is never touched; this is a new transaction that
+// earlier one. The original is never touched. This is a new transaction that
 // names what it cancels.
 type TransactionReverted struct {
 	ID          ID                `json:"id"`
@@ -260,12 +260,12 @@ func postingsFromWire(wire []PostingWire) ([]Posting, error) {
 // linkage that makes the stream tamper-evident.
 //
 // Events are appended and never modified. Seq is contiguous from 1 within a
-// ledger, and each event's PrevHash is the hash of the event before it, so
-// altering or removing any event breaks every hash that follows.
+// ledger. Each event's PrevHash is the hash of the event before it. A change
+// to any event, or its removal, therefore breaks every hash that follows.
 type Event struct {
-	// Seq is the event's position in its ledger's stream, starting at 1 with
-	// no gaps. It doubles as the "recorded" axis of the ledger's bitemporal
-	// model: an event with a lower Seq was known earlier.
+	// Seq is the event's position in its ledger's stream, starting at 1 with no
+	// gaps. It doubles as the "recorded" axis of the ledger's bitemporal model:
+	// an event with a lower Seq was known earlier.
 	Seq int64
 
 	// ID identifies the event itself, distinct from any identifier inside the
@@ -281,9 +281,9 @@ type Event struct {
 	// hashed byte for byte, so it must never be re-serialized in transit.
 	Payload []byte
 
-	// RecordedAt is when the ledger learned the fact. Business time lives in
-	// the payload instead, which is what lets a correction be recorded now and
-	// take effect in the past.
+	// RecordedAt is when the ledger learned the fact. Business time lives in the
+	// payload instead, which is what lets a correction be recorded now and take
+	// effect in the past.
 	RecordedAt time.Time
 
 	// IdempotencyKey is the caller's key for the command that produced this
@@ -297,8 +297,8 @@ type Event struct {
 // GenesisHash is the PrevHash of the first event in a ledger.
 var GenesisHash = [32]byte{}
 
-// NewEvent builds an unsealed event carrying payload. The returned event has no
-// Seq and no hashes. [Event.Seal] assigns those when the event is appended,
+// NewEvent builds an unsealed event carrying payload. The returned event has
+// no Seq and no hashes. [Event.Seal] assigns those when the event is appended,
 // because its position in the stream is not known until then.
 func NewEvent(ledgerID string, payload Payload, recordedAt time.Time, idempotencyKey string) (Event, error) {
 	if err := ValidateLedgerID(ledgerID); err != nil {
@@ -386,8 +386,8 @@ func (e Event) DecodePayload() (Payload, error) {
 	if err := dec.Decode(target); err != nil {
 		return nil, fmt.Errorf("%w: event %d: %v", ErrUnknownEvent, e.Seq, err)
 	}
-	// Return the value, not the pointer, so callers type-switch on the same
-	// types they constructed.
+	// Return the value, not the pointer, so callers type-switch on the same types
+	// they constructed.
 	switch decoded := target.(type) {
 	case *AccountOpened:
 		return *decoded, nil
@@ -402,9 +402,9 @@ func (e Event) DecodePayload() (Payload, error) {
 
 // VerifyChain checks that events form an unbroken chain: contiguous sequence
 // numbers, each event linked to the one before it, and every hash matching its
-// contents. prev is the hash the chain is expected to start from, which is
-// [GenesisHash] for a whole stream or the hash of the last verified event when
-// checking a chunk at a time.
+// contents. prev is the hash the chain must start from. That is [GenesisHash]
+// for a whole stream, or the hash of the last verified event when the caller
+// checks one chunk at a time.
 func VerifyChain(events []Event, startSeq int64, prev [32]byte) ([32]byte, error) {
 	for i, event := range events {
 		switch {
@@ -447,10 +447,10 @@ func ValidateLedgerID(id string) error {
 // object keys sorted, no insignificant whitespace, no floating-point numbers.
 //
 // The event hash covers these bytes, so the encoding has to be a function of
-// the value alone. Go's struct field order would already be stable, but a
-// canonical form also survives the payload being decoded and re-encoded by
-// another implementation -- which is exactly what an auditor verifying the
-// chain independently would do.
+// the value alone. Go's struct field order would already be stable. A
+// canonical form also survives another implementation decoding and re-encoding
+// the payload. That is exactly what an auditor who verifies the chain
+// independently does.
 func canonicalJSON(value any) ([]byte, error) {
 	raw, err := json.Marshal(value)
 	if err != nil {
@@ -480,16 +480,16 @@ func writeCanonical(buf *bytes.Buffer, value any) error {
 			buf.WriteString("false")
 		}
 	case json.Number:
-		// Floating-point has no place in a ledger, and its shortest
-		// representation is not stable enough to hash. Money is already
-		// encoded as a decimal string. Anything else numeric is a count.
+		// Floating-point has no place in a ledger, and its shortest representation
+		// is not stable enough to hash. Money is already encoded as a decimal
+		// string. Anything else numeric is a count.
 		if strings.ContainsAny(node.String(), ".eE") {
 			return fmt.Errorf("%w: non-integer number %s in payload", ErrEncoding, node)
 		}
 		buf.WriteString(node.String())
 	case string:
-		// Delegate string escaping to encoding/json so the output stays valid
-		// JSON for every rune, including the ones that need \u escapes.
+		// Delegate string escaping to encoding/json so the output stays valid JSON
+		// for every rune, including the ones that need \u escapes.
 		esc, err := json.Marshal(node)
 		if err != nil {
 			return fmt.Errorf("%w: %v", ErrEncoding, err)

@@ -1,7 +1,7 @@
 // Package httpapi serves a ledger over HTTP.
 //
-// It is deliberately thin: it parses, delegates to [app.Ledger], and maps
-// the domain's errors onto status codes. Every rule that matters lives in the
+// It is deliberately thin: it parses, delegates to [app.Ledger], and maps the
+// domain's errors onto status codes. Every rule that matters lives in the
 // ledger, so the same guarantees hold whether a caller comes through this API
 // or imports the package directly.
 package httpapi
@@ -21,8 +21,8 @@ import (
 	"github.com/brnom/ledger/domain"
 )
 
-// MaxBodyBytes caps a request body. A ledger takes small, structured commands;
-// anything larger is a mistake or an attack.
+// MaxBodyBytes caps a request body. A ledger takes small, structured commands.
+// Anything larger is a mistake or an attack.
 const MaxBodyBytes = 1 << 20
 
 // IdempotencyHeader is the header a caller uses to make a write safe to retry.
@@ -32,13 +32,13 @@ const IdempotencyHeader = "Idempotency-Key"
 // application, and nothing more.
 //
 // It is declared here, beside the code that consumes it, rather than exported
-// from the application package. That is the Go idiom and it is also what makes
-// the dependency point inward: the transport states its requirements, and the
-// application happens to satisfy them without knowing this package exists.
+// from the application package. That is the Go idiom, and it is also what
+// makes the dependency point inward. The transport states its requirements.
+// The application satisfies them without knowing this package exists.
 //
-// The practical payoff is that the transport can be exercised against a stub —
-// including failure paths a real ledger will not produce on demand — without a
-// store, a database, or a single event.
+// The practical payoff is that a stub can exercise the transport without a
+// store, a database, or a single event. That includes failure paths a real
+// ledger will not produce on demand.
 type Ledger interface {
 	ID() string
 
@@ -192,8 +192,8 @@ func (s *Server) handleOpenAccount(w http.ResponseWriter, r *http.Request) error
 	}
 	status := http.StatusCreated
 	if res.Replayed {
-		// A replay created nothing, so 200 rather than 201, and the header
-		// tells the caller why the body looks familiar.
+		// A replay created nothing, so 200 rather than 201, and the header tells the
+		// caller why the body looks familiar.
 		status = http.StatusOK
 		w.Header().Set("Idempotent-Replay", "true")
 	}
@@ -241,8 +241,8 @@ type balanceResponse struct {
 	// across the book, and what a caller reconciling the whole ledger wants.
 	Signed string `json:"signed"`
 
-	// The bounds the balance was computed under, echoed back so a client can
-	// tell a cached answer from a fresh one.
+	// The bounds the balance was computed under, echoed back so a client can tell
+	// a cached answer from a fresh one.
 	AsOfEffective *time.Time `json:"as_of_effective,omitempty"`
 	AsOfRecorded  *time.Time `json:"as_of_recorded,omitempty"`
 	AsOfSeq       int64      `json:"as_of_seq,omitempty"`
@@ -546,8 +546,8 @@ func (s *Server) serveEntries(w http.ResponseWriter, r *http.Request, query doma
 	}
 
 	body := map[string]any{"entries": out}
-	// A cursor is present exactly when a full page came back, which is the
-	// only case where more entries might exist.
+	// A cursor is present exactly when a full page came back, which is the only
+	// case where more entries might exist.
 	if query.Limit > 0 && len(entries) == query.Limit {
 		last := entries[len(entries)-1]
 		body["next"] = map[string]any{"after_seq": last.Seq, "after_index": last.Index}
@@ -685,10 +685,10 @@ func decodeOptional[T any](r *http.Request) (T, error) {
 	return decoded, nil
 }
 
-// resolveCurrency turns a code and an optional scale into a currency. Omitting
-// the scale is allowed only for codes the ledger already knows, so "BRL" needs
-// no scale but an unfamiliar code must say how many decimal places it has
-// rather than defaulting to a number that would silently misprice everything.
+// resolveCurrency turns a code and an optional scale into a currency. A caller
+// may omit the scale only for codes the ledger already knows. "BRL" therefore
+// needs no scale. An unfamiliar code must state how many decimal places it
+// has. A default here would misprice everything silently.
 func resolveCurrency(code string, scale *uint8) (domain.Currency, error) {
 	if scale != nil {
 		return domain.NewCurrency(code, *scale)

@@ -37,9 +37,9 @@ func propLedger(t *rapid.T) (*app.Ledger, context.Context) {
 		t.Fatalf("Open: %v", err)
 	}
 
-	// The accounts start well in the past, so a backdated entry lands inside
-	// their lifetime and exercises backdating rather than the check that an
-	// entry may not predate the account it touches.
+	// The accounts start well in the past. A backdated entry therefore lands
+	// inside their lifetime. It exercises backdating, not the check that an entry
+	// may not predate the account it touches.
 	open := func(name domain.AccountName, allowNegative bool) {
 		if _, _, err := ledger.OpenAccount(ctx, app.OpenAccountCommand{
 			Name: name, Currency: brl, Normal: domain.Credit, AllowNegative: allowNegative,
@@ -114,8 +114,8 @@ func TestPropertyLedgerInvariants(t *testing.T) {
 				switch {
 				case err == nil:
 					if res.Replayed {
-						// A replay answers with the original outcome and must
-						// not have written anything of its own.
+						// A replay answers with the original outcome and must not have written
+						// anything of its own.
 						mustNotWrite(t, ledger, ctx, before, nil)
 					} else {
 						committed = append(committed, res.TransactionID)
@@ -174,8 +174,8 @@ func checkConserved(t *rapid.T, ledger *app.Ledger, ctx context.Context) {
 	}
 }
 
-// An account that was opened without permission to go past zero must not have
-// been pushed past it, no matter what order the commands arrived in.
+// An account opened without permission to go past zero must not end up past
+// it. The order the commands arrived in makes no difference.
 func checkNoUnpermittedOverdraft(t *rapid.T, ledger *app.Ledger, ctx context.Context) {
 	accounts, err := ledger.Accounts(ctx, "")
 	if err != nil {
@@ -209,12 +209,12 @@ func checkChain(t *rapid.T, ledger *app.Ledger, ctx context.Context) {
 	}
 }
 
-// The one that matters most: for every prefix of the log, the balance as of
-// that point equals the sum of exactly the entries recorded up to it. The
-// prefix starts at 1 because AsOfSeq is zero-means-unbounded, so "as of 0" is
-// the whole book rather than an empty one. This is
-// the bitemporal claim -- "what did we believe, back then" -- reduced to
-// arithmetic, and it is what a single-timestamp ledger cannot answer.
+// The one that matters most is this. For every prefix of the log, the balance
+// as of that point equals the sum of exactly the entries recorded up to it.
+// The prefix starts at 1 because AsOfSeq is zero-means-unbounded, so "as of 0"
+// is the whole book rather than an empty one. This is the bitemporal claim --
+// "what did we believe, back then" -- reduced to arithmetic, and it is what a
+// single-timestamp ledger cannot answer.
 func checkEveryPrefixBalances(t *rapid.T, ledger *app.Ledger, ctx context.Context) {
 	head, err := ledger.Head(ctx)
 	if err != nil {

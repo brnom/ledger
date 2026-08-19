@@ -208,8 +208,8 @@ func TestAmountArithmetic(t *testing.T) {
 
 func TestAmountNoNearMissOverflow(t *testing.T) {
 	brl := MustCurrency("BRL")
-	// Boundary values must succeed; a too-eager overflow check is as wrong as
-	// a missing one.
+	// Boundary values must succeed. An overflow check that fires too early is as
+	// wrong as a missing one.
 	if got, err := FromMinor(brl, math.MaxInt64-1).Add(FromMinor(brl, 1)); err != nil || got.Minor() != math.MaxInt64 {
 		t.Errorf("Add to MaxInt64 = %v, %v", got, err)
 	}

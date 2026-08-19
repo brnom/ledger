@@ -13,14 +13,14 @@ const requestHashDomain = "ledger.request.v1"
 //
 // A fingerprint answers the only question idempotency turns on: are these two
 // requests the same request? It covers what the caller supplied and nothing
-// the ledger generates, so a retry of the same command fingerprints alike
-// while a genuinely different command does not -- which is what lets a reused
-// key be reported as a conflict rather than silently answered with someone
-// else's result.
+// the ledger generates. A retry of the same command therefore fingerprints
+// alike, and a genuinely different command does not. That is what lets the
+// ledger report a reused key as a conflict, instead of answering it silently
+// with someone else's result.
 //
 // That rule belongs to the ledger, not to the transport or the service that
-// happens to apply it, which is why it is stated here and why the canonical
-// encoding it depends on never has to leave this package.
+// applies it. That is why the rule is stated here. It is also why the
+// canonical encoding the rule depends on never has to leave this package.
 type openAccountFingerprint struct {
 	Kind          string            `json:"kind"`
 	Name          AccountName       `json:"name"`

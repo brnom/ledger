@@ -3,20 +3,20 @@
 // The design rests on three decisions:
 //
 // One writer per ledger. Every write transaction takes SELECT ... FOR UPDATE
-// on the ledger's row before doing anything else. Serializing writes per book
-// is what makes the event sequence gapless, which the hash chain depends on,
-// and it lets a command read the state it is about to change with nothing able
-// to slip in between.
+// on the ledger's row before doing anything else. Serialized writes per book
+// are what make the event sequence gapless, which the hash chain depends on.
+// They also let a command read the state it is about to change with nothing
+// able to come between.
 //
-// Projections in the same transaction as the events. The read model is written
-// alongside the log rather than by a follower, so a balance is never stale and
-// there is no lag to reason about. The log stays authoritative: the read model
-// can be dropped and rebuilt from it, and the tests check that a rebuild
-// reproduces it exactly.
+// Projections in the same transaction as the events. The store writes the read
+// model alongside the log rather than through a follower. A balance is
+// therefore never stale, and there is no lag to reason about. The log stays
+// authoritative: the read model can be dropped and rebuilt from it, and the
+// tests check that a rebuild reproduces it exactly.
 //
 // Payloads stored as json, not jsonb. jsonb reorders keys and rewrites
-// numbers; the event hash covers the exact bytes, so jsonb would break every
-// chain the moment it was read back.
+// numbers. The event hash covers the exact bytes, so jsonb would break every
+// chain on the first read back.
 package pgstore
 
 import (
@@ -110,8 +110,8 @@ func (s *Store) Update(ctx context.Context, ledgerID string, fn func(context.Con
 	}
 	defer tx.Rollback(context.WithoutCancel(ctx))
 
-	// The single-writer lock. Everything after this point, up to COMMIT, is
-	// the only writer this ledger has.
+	// The single-writer lock. Everything after this point, up to COMMIT, is the
+	// only writer this ledger has.
 	var locked string
 	err = tx.QueryRow(ctx, `SELECT id FROM ledgers WHERE id = $1 FOR UPDATE`, ledgerID).Scan(&locked)
 	if err != nil {
@@ -142,8 +142,8 @@ func (s *Store) Head(ctx context.Context, ledgerID string) (domain.Head, error) 
 	return readHead(ctx, s.pool, ledgerID)
 }
 
-// querier is the subset of pgx shared by a pool and a transaction, so the same
-// read can serve an outside caller and a command mid-flight.
+// querier is the subset of pgx that a pool and a transaction share. The same
+// read can therefore serve an outside caller and a command in flight.
 type querier interface {
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
@@ -221,15 +221,15 @@ func (s *Store) Accounts(ctx context.Context, ledgerID string, prefix domain.Acc
 	sql := `SELECT ` + accountColumns + ` FROM accounts WHERE ledger_id = $1`
 	args := []any{ledgerID}
 	if prefix != "" {
-		// Match the prefix itself or anything below it, on segment
-		// boundaries, so "assets" does not pull in "assets_frozen".
+		// Match the prefix itself or anything below it, on segment boundaries, so
+		// "assets" does not pull in "assets_frozen".
 		sql += ` AND (name = $2 OR name LIKE $3)`
 		args = append(args, string(prefix), escapeLike(string(prefix))+`:%`)
 	}
 	// COLLATE "C" makes this a byte-wise ordering, matching Go's string
-	// comparison. Without it the result would depend on the database's
-	// collation, which for punctuation-heavy account names is a real
-	// difference and not a cosmetic one.
+	// comparison. Without it the result would depend on the database's collation,
+	// which for punctuation-heavy account names is a real difference and not a
+	// cosmetic one.
 	sql += ` ORDER BY name COLLATE "C"`
 
 	rows, err := s.pool.Query(ctx, sql, args...)
@@ -291,8 +291,8 @@ func readTransaction(ctx context.Context, db querier, ledgerID string, id domain
 		rec.Metadata = metadata
 	}
 
-	// The postings come from the read model rather than from the event, so a
-	// transaction reads the same way whether or not the log is at hand.
+	// The postings come from the read model rather than from the event. A
+	// transaction therefore reads the same way with or without the log at hand.
 	rows, err := db.Query(ctx, `
 		SELECT account, amount_minor, currency_code, currency_scale
 		FROM entries WHERE ledger_id = $1 AND tx_id = $2 ORDER BY seq, idx`,
@@ -539,8 +539,8 @@ func escapeLike(pattern string) string {
 
 // readTime puts a timestamp back into the ledger's single representation. The
 // values were written as UTC truncated to microseconds, so this restores the
-// exact instant -- and, just as importantly, the same time.Location, so
-// entries read back compare equal to the ones a replay produces.
+// exact instant. It also restores the same time.Location, which matters just
+// as much. Entries read back then compare equal to the ones a replay produces.
 func readTime(at time.Time) time.Time { return at.UTC() }
 
 func toUUID(id domain.ID) pgtype.UUID {
@@ -574,9 +574,9 @@ func wrapNumericOverflow(err error, what string) error {
 	return fmt.Errorf("pgstore: %s: %w", what, err)
 }
 
-// wrapWriteError maps the constraint violations the schema is there to enforce
-// back onto the ledger's own errors, so callers see the same failure whichever
-// layer caught it.
+// wrapWriteError maps the constraint violations the schema enforces back onto
+// the ledger's own errors. Callers see the same failure whichever layer caught
+// it.
 func wrapWriteError(err error) error {
 	var pgErr *pgconn.PgError
 	if !errors.As(err, &pgErr) {
@@ -592,8 +592,8 @@ func wrapWriteError(err error) error {
 	case pgErr.Code == "23505" && pgErr.ConstraintName == "idempotency_pkey":
 		return fmt.Errorf("%w: %s", domain.ErrIdempotencyConflict, pgErr.Detail)
 	case pgErr.Code == "23505" && pgErr.ConstraintName == "events_pkey":
-		// Two writers reached the same sequence number, which the per-ledger
-		// lock is supposed to prevent.
+		// Two writers reached the same sequence number, which the per-ledger lock is
+		// supposed to prevent.
 		return fmt.Errorf("%w: %s", domain.ErrConflict, pgErr.Detail)
 	case pgErr.Code == "22003":
 		return fmt.Errorf("%w: %s", domain.ErrOverflow, pgErr.Message)
