@@ -96,7 +96,8 @@ nothing.
 The dependency graph pointed inward before this change — that was 0008's
 finding. What is new is that it is now checked rather than asserted: `make arch`
 fails the build if `domain` ever imports anything else in the module, or if
-`app` imports anything but `domain`. It runs in `make check`, so CI enforces it.
+`app` imports anything but `domain`. It runs in `make check`, and CI runs it as
+a step of its own, so a violation fails the build rather than the review.
 
 That guard is the real deliverable. Folder names are a claim about a codebase;
 `go list -deps` is the fact. 0008 was right that the structure held regardless
