@@ -31,27 +31,27 @@ var (
 // clock is hand-advanced so recorded timestamps are deterministic.
 type clock struct {
 	mu sync.Mutex
-	t  time.Time
+	at time.Time
 }
 
-func (c *clock) Now() time.Time {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.t
+func (clk *clock) Now() time.Time {
+	clk.mu.Lock()
+	defer clk.mu.Unlock()
+	return clk.at
 }
 
-func (c *clock) Advance(d time.Duration) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.t = c.t.Add(d)
+func (clk *clock) Advance(by time.Duration) {
+	clk.mu.Lock()
+	defer clk.mu.Unlock()
+	clk.at = clk.at.Add(by)
 }
 
 type harness struct {
-	t     *testing.T
-	l     *app.Ledger
-	store app.Store
-	clock *clock
-	ctx   context.Context
+	t      *testing.T
+	ledger *app.Ledger
+	store  app.Store
+	clock  *clock
+	ctx    context.Context
 }
 
 // ledgerCounter keeps each test on its own book, so a store shared across
@@ -61,21 +61,21 @@ var ledgerCounter atomic64
 func newHarness(t *testing.T, newStore NewStore) *harness {
 	t.Helper()
 	store := newStore(t)
-	c := &clock{t: base}
+	clk := &clock{at: base}
 	id := fmt.Sprintf("test-%d-%d", time.Now().UnixNano(), ledgerCounter.next())
-	l, err := app.Open(store, id,
-		app.WithClock(c.Now),
+	ledger, err := app.Open(store, id,
+		app.WithClock(clk.Now),
 		app.WithBackdateLimit(365*24*time.Hour),
 	)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	return &harness{t: t, l: l, store: store, clock: c, ctx: context.Background()}
+	return &harness{t: t, ledger: ledger, store: store, clock: clk, ctx: context.Background()}
 }
 
 func (h *harness) open(name domain.AccountName, allowNegative bool) {
 	h.t.Helper()
-	if _, _, err := h.l.OpenAccount(h.ctx, app.OpenAccountCommand{
+	if _, _, err := h.ledger.OpenAccount(h.ctx, app.OpenAccountCommand{
 		Name: name, Currency: brl, Normal: domain.Credit, AllowNegative: allowNegative,
 	}); err != nil {
 		h.t.Fatalf("OpenAccount(%q): %v", name, err)
@@ -84,7 +84,7 @@ func (h *harness) open(name domain.AccountName, allowNegative bool) {
 
 func (h *harness) transfer(from, to domain.AccountName, minor int64, effectiveAt time.Time) app.Result {
 	h.t.Helper()
-	res, err := h.l.Commit(h.ctx, app.CommitCommand{
+	res, err := h.ledger.Commit(h.ctx, app.CommitCommand{
 		EffectiveAt: effectiveAt,
 		Postings: []domain.Posting{
 			domain.Dr(from, domain.FromMinor(brl, minor)),
@@ -97,11 +97,11 @@ func (h *harness) transfer(from, to domain.AccountName, minor int64, effectiveAt
 	return res
 }
 
-func (h *harness) balance(q domain.BalanceQuery) int64 {
+func (h *harness) balance(query domain.BalanceQuery) int64 {
 	h.t.Helper()
-	amt, err := h.l.Balance(h.ctx, q)
+	amt, err := h.ledger.Balance(h.ctx, query)
 	if err != nil {
-		h.t.Fatalf("Balance(%+v): %v", q, err)
+		h.t.Fatalf("Balance(%+v): %v", query, err)
 	}
 	return amt.Minor()
 }
@@ -127,7 +127,7 @@ func testAccountLifecycle(t *testing.T, newStore NewStore) {
 	h := newHarness(t, newStore)
 	h.open("liabilities:users:1", false)
 
-	acct, err := h.l.Account(h.ctx, "liabilities:users:1")
+	acct, err := h.ledger.Account(h.ctx, "liabilities:users:1")
 	if err != nil {
 		t.Fatalf("Account: %v", err)
 	}
@@ -138,10 +138,10 @@ func testAccountLifecycle(t *testing.T, newStore NewStore) {
 		t.Errorf("OpenedAt = %v, OpenedSeq = %d; want %v, 1", acct.OpenedAt, acct.OpenedSeq, base)
 	}
 
-	if _, err := h.l.Account(h.ctx, "nowhere:at:all"); !errors.Is(err, domain.ErrAccountNotFound) {
+	if _, err := h.ledger.Account(h.ctx, "nowhere:at:all"); !errors.Is(err, domain.ErrAccountNotFound) {
 		t.Errorf("Account(missing) = %v, want ErrAccountNotFound", err)
 	}
-	if _, _, err := h.l.OpenAccount(h.ctx, app.OpenAccountCommand{
+	if _, _, err := h.ledger.OpenAccount(h.ctx, app.OpenAccountCommand{
 		Name: "liabilities:users:1", Currency: brl, Normal: domain.Credit,
 	}); !errors.Is(err, domain.ErrAccountExists) {
 		t.Errorf("reopening = %v, want ErrAccountExists", err)
@@ -182,7 +182,7 @@ func testAccountPrefix(t *testing.T, newStore NewStore) {
 	}
 	for _, tt := range tests {
 		t.Run(string(tt.prefix), func(t *testing.T) {
-			got, err := h.l.Accounts(h.ctx, tt.prefix)
+			got, err := h.ledger.Accounts(h.ctx, tt.prefix)
 			if err != nil {
 				t.Fatalf("Accounts: %v", err)
 			}
@@ -200,8 +200,8 @@ func testAccountPrefix(t *testing.T, newStore NewStore) {
 
 func names(accts []domain.Account) []domain.AccountName {
 	out := make([]domain.AccountName, len(accts))
-	for i, a := range accts {
-		out[i] = a.Name
+	for i, acct := range accts {
+		out[i] = acct.Name
 	}
 	return out
 }
@@ -216,7 +216,7 @@ func testBitemporal(t *testing.T, newStore NewStore) {
 
 	day1 := base
 	h.transfer("equity:opening-balances", "liabilities:users:1", 10000, day1)
-	first, err := h.l.Head(h.ctx)
+	first, err := h.ledger.Head(h.ctx)
 	if err != nil {
 		t.Fatalf("Head: %v", err)
 	}
@@ -228,9 +228,9 @@ func testBitemporal(t *testing.T, newStore NewStore) {
 	h.transfer("equity:opening-balances", "liabilities:users:1", 2500, day2)
 
 	tests := []struct {
-		name string
-		q    domain.BalanceQuery
-		want int64
+		name  string
+		query domain.BalanceQuery
+		want  int64
 	}{
 		{"unbounded", domain.BalanceQuery{Account: "liabilities:users:1"}, -12500},
 		{"effective on day 2", domain.BalanceQuery{
@@ -256,7 +256,7 @@ func testBitemporal(t *testing.T, newStore NewStore) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := h.balance(tt.q); got != tt.want {
+			if got := h.balance(tt.query); got != tt.want {
 				t.Errorf("balance = %d, want %d", got, tt.want)
 			}
 		})
@@ -279,9 +279,9 @@ func testEntryQueries(t *testing.T, newStore NewStore) {
 	second := h.transfer("liabilities:users:1", "liabilities:users:2", 1500, time.Time{})
 
 	tests := []struct {
-		name string
-		q    domain.EntryQuery
-		want int
+		name  string
+		query domain.EntryQuery
+		want  int
 	}{
 		{"everything", domain.EntryQuery{}, 4},
 		{"by account", domain.EntryQuery{Account: "liabilities:users:1"}, 2},
@@ -298,7 +298,7 @@ func testEntryQueries(t *testing.T, newStore NewStore) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := h.l.Entries(h.ctx, tt.q)
+			got, err := h.ledger.Entries(h.ctx, tt.query)
 			if err != nil {
 				t.Fatalf("Entries: %v", err)
 			}
@@ -314,7 +314,7 @@ func testEntryQueries(t *testing.T, newStore NewStore) {
 		})
 	}
 
-	if _, err := h.l.Entries(h.ctx, domain.EntryQuery{
+	if _, err := h.ledger.Entries(h.ctx, domain.EntryQuery{
 		Account: "a:b", AccountPrefix: "a",
 	}); !errors.Is(err, domain.ErrInvalidAccount) {
 		t.Errorf("Account and AccountPrefix together = %v, want ErrInvalidAccount", err)
@@ -336,9 +336,9 @@ func testEntryPagination(t *testing.T, newStore NewStore) {
 		after domain.EntryQuery
 	)
 	for page := 0; page < 100; page++ {
-		q := after
-		q.Limit = 7
-		got, err := h.l.Entries(h.ctx, q)
+		query := after
+		query.Limit = 7
+		got, err := h.ledger.Entries(h.ctx, query)
 		if err != nil {
 			t.Fatalf("Entries: %v", err)
 		}
@@ -373,13 +373,13 @@ func testIdempotency(t *testing.T, newStore NewStore) {
 			domain.Cr("liabilities:users:1", domain.FromMinor(brl, 2500)),
 		},
 	}
-	first, err := h.l.Commit(h.ctx, cmd)
+	first, err := h.ledger.Commit(h.ctx, cmd)
 	if err != nil {
 		t.Fatalf("Commit: %v", err)
 	}
 
 	h.clock.Advance(time.Hour)
-	second, err := h.l.Commit(h.ctx, cmd)
+	second, err := h.ledger.Commit(h.ctx, cmd)
 	if err != nil {
 		t.Fatalf("retry: %v", err)
 	}
@@ -392,7 +392,7 @@ func testIdempotency(t *testing.T, newStore NewStore) {
 
 	conflicting := cmd
 	conflicting.Reference = "different"
-	if _, err := h.l.Commit(h.ctx, conflicting); !errors.Is(err, domain.ErrIdempotencyConflict) {
+	if _, err := h.ledger.Commit(h.ctx, conflicting); !errors.Is(err, domain.ErrIdempotencyConflict) {
 		t.Errorf("reused key with a new request = %v, want ErrIdempotencyConflict", err)
 	}
 }
@@ -404,7 +404,7 @@ func testRevert(t *testing.T, newStore NewStore) {
 	committed := h.transfer("equity:opening-balances", "liabilities:users:1", 2500, time.Time{})
 
 	h.clock.Advance(time.Hour)
-	reverted, err := h.l.Revert(h.ctx, app.RevertCommand{
+	reverted, err := h.ledger.Revert(h.ctx, app.RevertCommand{
 		TransactionID: committed.TransactionID, Reason: "chargeback",
 	})
 	if err != nil {
@@ -414,7 +414,7 @@ func testRevert(t *testing.T, newStore NewStore) {
 		t.Errorf("balance = %d after reversal, want 0", got)
 	}
 
-	original, err := h.l.Transaction(h.ctx, committed.TransactionID)
+	original, err := h.ledger.Transaction(h.ctx, committed.TransactionID)
 	if err != nil {
 		t.Fatalf("Transaction: %v", err)
 	}
@@ -425,7 +425,7 @@ func testRevert(t *testing.T, newStore NewStore) {
 		t.Errorf("original has %d postings, want 2", len(original.Postings))
 	}
 
-	reversal, err := h.l.Transaction(h.ctx, reverted.TransactionID)
+	reversal, err := h.ledger.Transaction(h.ctx, reverted.TransactionID)
 	if err != nil {
 		t.Fatalf("Transaction: %v", err)
 	}
@@ -433,12 +433,12 @@ func testRevert(t *testing.T, newStore NewStore) {
 		t.Errorf("Reverts = %s, want %s", reversal.Reverts, committed.TransactionID)
 	}
 
-	if _, err := h.l.Revert(h.ctx, app.RevertCommand{
+	if _, err := h.ledger.Revert(h.ctx, app.RevertCommand{
 		TransactionID: committed.TransactionID,
 	}); !errors.Is(err, domain.ErrAlreadyReverted) {
 		t.Errorf("second Revert = %v, want ErrAlreadyReverted", err)
 	}
-	if _, err := h.l.Transaction(h.ctx, domain.NewID()); !errors.Is(err, domain.ErrTransactionNotFound) {
+	if _, err := h.ledger.Transaction(h.ctx, domain.NewID()); !errors.Is(err, domain.ErrTransactionNotFound) {
 		t.Errorf("Transaction(unknown) = %v, want ErrTransactionNotFound", err)
 	}
 }
@@ -451,16 +451,16 @@ func testRejectionLeavesNoTrace(t *testing.T, newStore NewStore) {
 	h.open("liabilities:users:1", false)
 	h.transfer("equity:opening-balances", "liabilities:users:1", 1000, time.Time{})
 
-	before, err := h.l.Head(h.ctx)
+	before, err := h.ledger.Head(h.ctx)
 	if err != nil {
 		t.Fatalf("Head: %v", err)
 	}
-	beforeEntries, err := h.l.Entries(h.ctx, domain.EntryQuery{})
+	beforeEntries, err := h.ledger.Entries(h.ctx, domain.EntryQuery{})
 	if err != nil {
 		t.Fatalf("Entries: %v", err)
 	}
 
-	_, err = h.l.Commit(h.ctx, app.CommitCommand{
+	_, err = h.ledger.Commit(h.ctx, app.CommitCommand{
 		IdempotencyKey: "doomed",
 		Postings: []domain.Posting{
 			domain.Dr("liabilities:users:1", domain.FromMinor(brl, 5000)),
@@ -471,14 +471,14 @@ func testRejectionLeavesNoTrace(t *testing.T, newStore NewStore) {
 		t.Fatalf("Commit = %v, want ErrInsufficientFunds", err)
 	}
 
-	after, err := h.l.Head(h.ctx)
+	after, err := h.ledger.Head(h.ctx)
 	if err != nil {
 		t.Fatalf("Head: %v", err)
 	}
 	if after != before {
 		t.Errorf("the stream advanced from %d to %d on a rejected command", before.Seq, after.Seq)
 	}
-	afterEntries, err := h.l.Entries(h.ctx, domain.EntryQuery{})
+	afterEntries, err := h.ledger.Entries(h.ctx, domain.EntryQuery{})
 	if err != nil {
 		t.Fatalf("Entries: %v", err)
 	}
@@ -488,7 +488,7 @@ func testRejectionLeavesNoTrace(t *testing.T, newStore NewStore) {
 
 	// The idempotency key of a failed command must be free to reuse, or a
 	// transient failure would poison the key forever.
-	if _, err := h.l.Commit(h.ctx, app.CommitCommand{
+	if _, err := h.ledger.Commit(h.ctx, app.CommitCommand{
 		IdempotencyKey: "doomed",
 		Postings: []domain.Posting{
 			domain.Dr("liabilities:users:1", domain.FromMinor(brl, 500)),
@@ -508,11 +508,11 @@ func testChainVerifies(t *testing.T, newStore NewStore) {
 		h.transfer("equity:opening-balances", "liabilities:users:1", 10, time.Time{})
 	}
 
-	head, err := h.l.Head(h.ctx)
+	head, err := h.ledger.Head(h.ctx)
 	if err != nil {
 		t.Fatalf("Head: %v", err)
 	}
-	verified, err := h.l.Verify(h.ctx)
+	verified, err := h.ledger.Verify(h.ctx)
 	if err != nil {
 		t.Fatalf("Verify: %v", err)
 	}
@@ -521,7 +521,7 @@ func testChainVerifies(t *testing.T, newStore NewStore) {
 	}
 
 	// The stream must be gapless, which is what the chain is built on.
-	events, err := h.l.Events(h.ctx, 1, 10000)
+	events, err := h.ledger.Events(h.ctx, 1, 10000)
 	if err != nil {
 		t.Fatalf("Events: %v", err)
 	}
@@ -548,7 +548,7 @@ func testReplayMatchesReadModel(t *testing.T, newStore NewStore) {
 	var last domain.ID
 	for i := 0; i < 20; i++ {
 		h.clock.Advance(time.Minute)
-		res, err := h.l.Commit(h.ctx, app.CommitCommand{
+		res, err := h.ledger.Commit(h.ctx, app.CommitCommand{
 			Reference: fmt.Sprintf("ref-%d", i),
 			Metadata:  map[string]string{"batch": "nightly", "seq": fmt.Sprint(i)},
 			Postings: []domain.Posting{
@@ -562,11 +562,11 @@ func testReplayMatchesReadModel(t *testing.T, newStore NewStore) {
 		}
 		last = res.TransactionID
 	}
-	if _, err := h.l.Revert(h.ctx, app.RevertCommand{TransactionID: last}); err != nil {
+	if _, err := h.ledger.Revert(h.ctx, app.RevertCommand{TransactionID: last}); err != nil {
 		t.Fatalf("Revert: %v", err)
 	}
 
-	events, err := h.l.Events(h.ctx, 1, 10000)
+	events, err := h.ledger.Events(h.ctx, 1, 10000)
 	if err != nil {
 		t.Fatalf("Events: %v", err)
 	}
@@ -586,7 +586,7 @@ func testReplayMatchesReadModel(t *testing.T, newStore NewStore) {
 		replayed = append(replayed, proj.Entries...)
 	}
 
-	stored, err := h.l.Entries(h.ctx, domain.EntryQuery{Limit: 10000})
+	stored, err := h.ledger.Entries(h.ctx, domain.EntryQuery{Limit: 10000})
 	if err != nil {
 		t.Fatalf("Entries: %v", err)
 	}
@@ -627,7 +627,7 @@ func testConcurrentWriters(t *testing.T, newStore NewStore) {
 		go func(w int) {
 			defer wg.Done()
 			for i := 0; i < each; i++ {
-				_, err := h.l.Commit(context.Background(), app.CommitCommand{
+				_, err := h.ledger.Commit(context.Background(), app.CommitCommand{
 					Reference: fmt.Sprintf("w%d-%d", w, i),
 					Postings: []domain.Posting{
 						domain.Dr("equity:opening-balances", domain.FromMinor(brl, 10)),
@@ -652,18 +652,18 @@ func testConcurrentWriters(t *testing.T, newStore NewStore) {
 	}
 
 	// Concurrency must not put a hole in the sequence, or the chain breaks.
-	head, err := h.l.Head(h.ctx)
+	head, err := h.ledger.Head(h.ctx)
 	if err != nil {
 		t.Fatalf("Head: %v", err)
 	}
-	events, err := h.l.Events(h.ctx, 1, 100000)
+	events, err := h.ledger.Events(h.ctx, 1, 100000)
 	if err != nil {
 		t.Fatalf("Events: %v", err)
 	}
 	if int64(len(events)) != head.Seq {
 		t.Fatalf("head is at %d but only %d events exist", head.Seq, len(events))
 	}
-	if _, err := h.l.Verify(h.ctx); err != nil {
+	if _, err := h.ledger.Verify(h.ctx); err != nil {
 		t.Errorf("Verify after concurrent writes: %v", err)
 	}
 }
@@ -688,7 +688,7 @@ func testConcurrentOverdraft(t *testing.T, newStore NewStore) {
 		wg.Add(1)
 		go func(w int) {
 			defer wg.Done()
-			_, err := h.l.Commit(context.Background(), app.CommitCommand{
+			_, err := h.ledger.Commit(context.Background(), app.CommitCommand{
 				Reference: fmt.Sprintf("w%d", w),
 				Postings: []domain.Posting{
 					domain.Dr("liabilities:users:1", domain.FromMinor(brl, 100)),
@@ -742,7 +742,7 @@ func testConcurrentIdempotency(t *testing.T, newStore NewStore) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			res, err := h.l.Commit(context.Background(), cmd)
+			res, err := h.ledger.Commit(context.Background(), cmd)
 			if err != nil {
 				t.Errorf("Commit: %v", err)
 				return

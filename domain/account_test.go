@@ -71,10 +71,10 @@ func TestNormal(t *testing.T) {
 	if err := Normal(0).Validate(); !errors.Is(err, ErrInvalidAccount) {
 		t.Errorf("Normal(0).Validate() = %v, want ErrInvalidAccount", err)
 	}
-	for _, s := range []string{"debit", "credit"} {
-		got, err := ParseNormal(s)
-		if err != nil || got.String() != s {
-			t.Errorf("ParseNormal(%q) = %v, %v", s, got, err)
+	for _, name := range []string{"debit", "credit"} {
+		got, err := ParseNormal(name)
+		if err != nil || got.String() != name {
+			t.Errorf("ParseNormal(%q) = %v, %v", name, got, err)
 		}
 	}
 	if _, err := ParseNormal("Debit"); !errors.Is(err, ErrInvalidAccount) {

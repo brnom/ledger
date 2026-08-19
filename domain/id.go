@@ -20,15 +20,15 @@ type ID [16]byte
 // NewID returns a new time-ordered ID.
 func NewID() ID { return newIDAt(time.Now()) }
 
-func newIDAt(t time.Time) ID {
+func newIDAt(at time.Time) ID {
 	var id ID
 	// crypto/rand.Read is documented never to fail as of Go 1.24.
 	rand.Read(id[6:])
 
-	ms := uint64(t.UnixMilli())
-	var b [8]byte
-	binary.BigEndian.PutUint64(b[:], ms)
-	copy(id[0:6], b[2:8])
+	ms := uint64(at.UnixMilli())
+	var buf [8]byte
+	binary.BigEndian.PutUint64(buf[:], ms)
+	copy(id[0:6], buf[2:8])
 
 	id[6] = (id[6] & 0x0f) | 0x70 // version 7
 	id[8] = (id[8] & 0x3f) | 0x80 // RFC 4122 variant
@@ -37,9 +37,9 @@ func newIDAt(t time.Time) ID {
 
 // Time returns the millisecond timestamp encoded in the ID.
 func (id ID) Time() time.Time {
-	var b [8]byte
-	copy(b[2:8], id[0:6])
-	return time.UnixMilli(int64(binary.BigEndian.Uint64(b[:]))).UTC()
+	var buf [8]byte
+	copy(buf[2:8], id[0:6])
+	return time.UnixMilli(int64(binary.BigEndian.Uint64(buf[:]))).UTC()
 }
 
 // IsZero reports whether the ID is unset.
@@ -61,14 +61,14 @@ func (id ID) String() string {
 }
 
 // ParseID parses the canonical hyphenated hex form.
-func ParseID(s string) (ID, error) {
+func ParseID(text string) (ID, error) {
 	var id ID
-	if len(s) != 36 || s[8] != '-' || s[13] != '-' || s[18] != '-' || s[23] != '-' {
-		return ID{}, fmt.Errorf("%w: %q is not a UUID", ErrInvalidID, s)
+	if len(text) != 36 || text[8] != '-' || text[13] != '-' || text[18] != '-' || text[23] != '-' {
+		return ID{}, fmt.Errorf("%w: %q is not a UUID", ErrInvalidID, text)
 	}
-	src := []byte(s[0:8] + s[9:13] + s[14:18] + s[19:23] + s[24:36])
+	src := []byte(text[0:8] + text[9:13] + text[14:18] + text[19:23] + text[24:36])
 	if _, err := hex.Decode(id[:], src); err != nil {
-		return ID{}, fmt.Errorf("%w: %q is not a UUID", ErrInvalidID, s)
+		return ID{}, fmt.Errorf("%w: %q is not a UUID", ErrInvalidID, text)
 	}
 	return id, nil
 }
@@ -78,8 +78,8 @@ func ParseID(s string) (ID, error) {
 func (id ID) MarshalText() ([]byte, error) { return []byte(id.String()), nil }
 
 // UnmarshalText implements [encoding.TextUnmarshaler].
-func (id *ID) UnmarshalText(b []byte) error {
-	parsed, err := ParseID(string(b))
+func (id *ID) UnmarshalText(text []byte) error {
+	parsed, err := ParseID(string(text))
 	if err != nil {
 		return err
 	}

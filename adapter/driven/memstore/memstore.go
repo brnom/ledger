@@ -64,12 +64,12 @@ func newBook() *book {
 func (s *Store) book(ledgerID string) *book {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	b, ok := s.books[ledgerID]
+	bk, ok := s.books[ledgerID]
 	if !ok {
-		b = newBook()
-		s.books[ledgerID] = b
+		bk = newBook()
+		s.books[ledgerID] = bk
 	}
-	return b
+	return bk
 }
 
 // Update implements [app.Store]. It holds the ledger's write lock for the
@@ -78,32 +78,32 @@ func (s *Store) Update(ctx context.Context, ledgerID string, fn func(context.Con
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	b := s.book(ledgerID)
-	b.mu.Lock()
-	defer b.mu.Unlock()
+	bk := s.book(ledgerID)
+	bk.mu.Lock()
+	defer bk.mu.Unlock()
 
-	w := newWriter(ledgerID, b)
-	if err := fn(ctx, w); err != nil {
+	writer := newWriter(ledgerID, bk)
+	if err := fn(ctx, writer); err != nil {
 		return err // everything staged is dropped with the writer
 	}
-	w.commit()
+	writer.commit()
 	return nil
 }
 
 // Head implements [app.Store].
 func (s *Store) Head(ctx context.Context, ledgerID string) (domain.Head, error) {
-	b := s.book(ledgerID)
-	b.mu.RLock()
-	defer b.mu.RUnlock()
-	return b.head, nil
+	bk := s.book(ledgerID)
+	bk.mu.RLock()
+	defer bk.mu.RUnlock()
+	return bk.head, nil
 }
 
 // Account implements [app.Store].
 func (s *Store) Account(ctx context.Context, ledgerID string, name domain.AccountName) (domain.Account, error) {
-	b := s.book(ledgerID)
-	b.mu.RLock()
-	defer b.mu.RUnlock()
-	acct, ok := b.accounts[name]
+	bk := s.book(ledgerID)
+	bk.mu.RLock()
+	defer bk.mu.RUnlock()
+	acct, ok := bk.accounts[name]
 	if !ok {
 		return domain.Account{}, fmt.Errorf("%w: %q", domain.ErrAccountNotFound, name)
 	}
@@ -112,12 +112,12 @@ func (s *Store) Account(ctx context.Context, ledgerID string, name domain.Accoun
 
 // Accounts implements [app.Store].
 func (s *Store) Accounts(ctx context.Context, ledgerID string, prefix domain.AccountName) ([]domain.Account, error) {
-	b := s.book(ledgerID)
-	b.mu.RLock()
-	defer b.mu.RUnlock()
+	bk := s.book(ledgerID)
+	bk.mu.RLock()
+	defer bk.mu.RUnlock()
 
-	out := make([]domain.Account, 0, len(b.accounts))
-	for name, acct := range b.accounts {
+	out := make([]domain.Account, 0, len(bk.accounts))
+	for name, acct := range bk.accounts {
 		if prefix != "" && !name.HasPrefix(prefix) {
 			continue
 		}
@@ -129,10 +129,10 @@ func (s *Store) Accounts(ctx context.Context, ledgerID string, prefix domain.Acc
 
 // Transaction implements [app.Store].
 func (s *Store) Transaction(ctx context.Context, ledgerID string, id domain.ID) (domain.RecordedTransaction, error) {
-	b := s.book(ledgerID)
-	b.mu.RLock()
-	defer b.mu.RUnlock()
-	tx, ok := b.txs[id]
+	bk := s.book(ledgerID)
+	bk.mu.RLock()
+	defer bk.mu.RUnlock()
+	tx, ok := bk.txs[id]
 	if !ok {
 		return domain.RecordedTransaction{}, fmt.Errorf("%w: %s", domain.ErrTransactionNotFound, id)
 	}
@@ -141,22 +141,22 @@ func (s *Store) Transaction(ctx context.Context, ledgerID string, id domain.ID) 
 
 // Balance implements [app.Store]. It sums the entries the query selects
 // along both time axes.
-func (s *Store) Balance(ctx context.Context, ledgerID string, q domain.BalanceQuery) (domain.Amount, error) {
-	b := s.book(ledgerID)
-	b.mu.RLock()
-	defer b.mu.RUnlock()
+func (s *Store) Balance(ctx context.Context, ledgerID string, query domain.BalanceQuery) (domain.Amount, error) {
+	bk := s.book(ledgerID)
+	bk.mu.RLock()
+	defer bk.mu.RUnlock()
 
-	acct, ok := b.accounts[q.Account]
+	acct, ok := bk.accounts[query.Account]
 	if !ok {
-		return domain.Amount{}, fmt.Errorf("%w: %q", domain.ErrAccountNotFound, q.Account)
+		return domain.Amount{}, fmt.Errorf("%w: %q", domain.ErrAccountNotFound, query.Account)
 	}
 
 	sum := domain.Zero(acct.Currency)
-	for _, e := range b.entries {
-		if e.Account != q.Account || !matchesBalanceQuery(e, q) {
+	for _, entry := range bk.entries {
+		if entry.Account != query.Account || !matchesBalanceQuery(entry, query) {
 			continue
 		}
-		next, err := sum.Add(e.Amount)
+		next, err := sum.Add(entry.Amount)
 		if err != nil {
 			return domain.Amount{}, err
 		}
@@ -165,41 +165,41 @@ func (s *Store) Balance(ctx context.Context, ledgerID string, q domain.BalanceQu
 	return sum, nil
 }
 
-func matchesBalanceQuery(e domain.Entry, q domain.BalanceQuery) bool {
-	if !q.AsOfEffective.IsZero() && e.EffectiveAt.After(q.AsOfEffective) {
+func matchesBalanceQuery(entry domain.Entry, query domain.BalanceQuery) bool {
+	if !query.AsOfEffective.IsZero() && entry.EffectiveAt.After(query.AsOfEffective) {
 		return false
 	}
 	// A sequence bound is exact, so it wins over a timestamp bound: several
 	// events can share a recorded time, but only one can have a given Seq.
-	if q.AsOfSeq > 0 {
-		return e.Seq <= q.AsOfSeq
+	if query.AsOfSeq > 0 {
+		return entry.Seq <= query.AsOfSeq
 	}
-	if !q.AsOfRecorded.IsZero() && e.RecordedAt.After(q.AsOfRecorded) {
+	if !query.AsOfRecorded.IsZero() && entry.RecordedAt.After(query.AsOfRecorded) {
 		return false
 	}
 	return true
 }
 
 // Entries implements [app.Store].
-func (s *Store) Entries(ctx context.Context, ledgerID string, q domain.EntryQuery) ([]domain.Entry, error) {
-	if q.Account != "" && q.AccountPrefix != "" {
+func (s *Store) Entries(ctx context.Context, ledgerID string, query domain.EntryQuery) ([]domain.Entry, error) {
+	if query.Account != "" && query.AccountPrefix != "" {
 		return nil, fmt.Errorf("%w: set Account or AccountPrefix, not both", domain.ErrInvalidAccount)
 	}
-	limit := q.Limit
+	limit := query.Limit
 	if limit <= 0 {
 		limit = DefaultEntryLimit
 	}
 
-	b := s.book(ledgerID)
-	b.mu.RLock()
-	defer b.mu.RUnlock()
+	bk := s.book(ledgerID)
+	bk.mu.RLock()
+	defer bk.mu.RUnlock()
 
-	out := make([]domain.Entry, 0, min(limit, len(b.entries)))
-	for _, e := range b.entries {
-		if !matchesEntryQuery(e, q) {
+	out := make([]domain.Entry, 0, min(limit, len(bk.entries)))
+	for _, entry := range bk.entries {
+		if !matchesEntryQuery(entry, query) {
 			continue
 		}
-		out = append(out, e)
+		out = append(out, entry)
 		if len(out) == limit {
 			break
 		}
@@ -207,27 +207,27 @@ func (s *Store) Entries(ctx context.Context, ledgerID string, q domain.EntryQuer
 	return out, nil
 }
 
-func matchesEntryQuery(e domain.Entry, q domain.EntryQuery) bool {
+func matchesEntryQuery(entry domain.Entry, query domain.EntryQuery) bool {
 	switch {
-	case q.Account != "" && e.Account != q.Account:
+	case query.Account != "" && entry.Account != query.Account:
 		return false
-	case q.AccountPrefix != "" && !e.Account.HasPrefix(q.AccountPrefix):
+	case query.AccountPrefix != "" && !entry.Account.HasPrefix(query.AccountPrefix):
 		return false
-	case !q.TxID.IsZero() && e.TxID != q.TxID:
+	case !query.TxID.IsZero() && entry.TxID != query.TxID:
 		return false
-	case !q.EffectiveFrom.IsZero() && e.EffectiveAt.Before(q.EffectiveFrom):
+	case !query.EffectiveFrom.IsZero() && entry.EffectiveAt.Before(query.EffectiveFrom):
 		return false
-	case !q.EffectiveTo.IsZero() && e.EffectiveAt.After(q.EffectiveTo):
+	case !query.EffectiveTo.IsZero() && entry.EffectiveAt.After(query.EffectiveTo):
 		return false
-	case !q.RecordedFrom.IsZero() && e.RecordedAt.Before(q.RecordedFrom):
+	case !query.RecordedFrom.IsZero() && entry.RecordedAt.Before(query.RecordedFrom):
 		return false
-	case !q.RecordedTo.IsZero() && e.RecordedAt.After(q.RecordedTo):
+	case !query.RecordedTo.IsZero() && entry.RecordedAt.After(query.RecordedTo):
 		return false
-	case q.FromSeq > 0 && e.Seq < q.FromSeq:
+	case query.FromSeq > 0 && entry.Seq < query.FromSeq:
 		return false
-	case q.ToSeq > 0 && e.Seq > q.ToSeq:
+	case query.ToSeq > 0 && entry.Seq > query.ToSeq:
 		return false
-	case q.AfterSeq > 0 && (e.Seq < q.AfterSeq || (e.Seq == q.AfterSeq && e.Index <= q.AfterIndex)):
+	case query.AfterSeq > 0 && (entry.Seq < query.AfterSeq || (entry.Seq == query.AfterSeq && entry.Index <= query.AfterIndex)):
 		return false
 	}
 	return true
@@ -242,18 +242,18 @@ func (s *Store) Events(ctx context.Context, ledgerID string, fromSeq int64, limi
 		limit = DefaultEntryLimit
 	}
 
-	b := s.book(ledgerID)
-	b.mu.RLock()
-	defer b.mu.RUnlock()
+	bk := s.book(ledgerID)
+	bk.mu.RLock()
+	defer bk.mu.RUnlock()
 
-	if fromSeq > int64(len(b.events)) {
+	if fromSeq > int64(len(bk.events)) {
 		return nil, nil
 	}
-	end := min(int64(len(b.events)), fromSeq-1+int64(limit))
+	end := min(int64(len(bk.events)), fromSeq-1+int64(limit))
 	// Events are immutable, so handing out a copy of the slice header over
 	// shared backing memory is safe as long as callers do not write to it.
 	out := make([]domain.Event, end-fromSeq+1)
-	copy(out, b.events[fromSeq-1:end])
+	copy(out, bk.events[fromSeq-1:end])
 	return out, nil
 }
 
@@ -277,11 +277,11 @@ type writer struct {
 	revertedBy map[domain.ID]domain.ID
 }
 
-func newWriter(ledgerID string, b *book) *writer {
+func newWriter(ledgerID string, bk *book) *writer {
 	return &writer{
 		ledgerID:   ledgerID,
-		book:       b,
-		head:       b.head,
+		book:       bk,
+		head:       bk.head,
 		accounts:   make(map[domain.AccountName]domain.Account),
 		txs:        make(map[domain.ID]domain.RecordedTransaction),
 		deltas:     make(map[domain.AccountName]domain.Amount),
@@ -326,8 +326,8 @@ func (w *writer) Transaction(id domain.ID) (domain.RecordedTransaction, bool, er
 		tx, ok = w.book.txs[id]
 	}
 	if ok {
-		if by, reverted := w.revertedBy[id]; reverted {
-			tx.RevertedBy = by
+		if reversal, reverted := w.revertedBy[id]; reverted {
+			tx.RevertedBy = reversal
 		}
 	}
 	return tx, ok, nil
@@ -345,14 +345,14 @@ func (w *writer) Idempotency(key string) (domain.IdempotencyRecord, bool, error)
 
 // Stage seals the event at the end of the stream and folds its projection into
 // the writer's overlay.
-func (w *writer) Stage(e *domain.Event) error {
-	if e.LedgerID != w.ledgerID {
+func (w *writer) Stage(event *domain.Event) error {
+	if event.LedgerID != w.ledgerID {
 		return fmt.Errorf("%w: event is for ledger %q, writer holds %q",
-			domain.ErrInvalidID, e.LedgerID, w.ledgerID)
+			domain.ErrInvalidID, event.LedgerID, w.ledgerID)
 	}
-	e.Seal(w.head.Seq+1, w.head.Hash)
+	event.Seal(w.head.Seq+1, w.head.Hash)
 
-	proj, err := domain.Project(*e)
+	proj, err := domain.Project(*event)
 	if err != nil {
 		return err
 	}
@@ -377,9 +377,9 @@ func (w *writer) Stage(e *domain.Event) error {
 		w.deltas[entry.Account] = next
 	}
 
-	w.events = append(w.events, *e)
+	w.events = append(w.events, *event)
 	w.entries = append(w.entries, proj.Entries...)
-	w.head = domain.Head{Seq: e.Seq, Hash: e.Hash}
+	w.head = domain.Head{Seq: event.Seq, Hash: event.Hash}
 	return nil
 }
 
@@ -391,47 +391,47 @@ func (w *writer) StageIdempotency(rec domain.IdempotencyRecord) error {
 // commit folds the staged overlay into the book. It runs under the book's
 // write lock and cannot fail, which is what makes the command atomic.
 func (w *writer) commit() {
-	b := w.book
-	b.events = append(b.events, w.events...)
-	b.entries = append(b.entries, w.entries...)
+	bk := w.book
+	bk.events = append(bk.events, w.events...)
+	bk.entries = append(bk.entries, w.entries...)
 	for name, acct := range w.accounts {
-		b.accounts[name] = acct
+		bk.accounts[name] = acct
 	}
 	for id, tx := range w.txs {
-		b.txs[id] = tx
+		bk.txs[id] = tx
 	}
-	for original, by := range w.revertedBy {
-		if tx, ok := b.txs[original]; ok {
-			tx.RevertedBy = by
-			b.txs[original] = tx
+	for original, reversal := range w.revertedBy {
+		if tx, ok := bk.txs[original]; ok {
+			tx.RevertedBy = reversal
+			bk.txs[original] = tx
 		}
 	}
 	for _, rec := range w.idem {
-		b.idem[rec.Key] = rec
+		bk.idem[rec.Key] = rec
 	}
 	for name, delta := range w.deltas {
-		current, ok := b.balances[name]
+		current, ok := bk.balances[name]
 		if !ok {
 			current = domain.Zero(delta.Currency())
 		}
 		// Overflow was already ruled out when the delta was staged against
 		// this same balance.
 		next, _ := current.Add(delta)
-		b.balances[name] = next
+		bk.balances[name] = next
 	}
-	b.head = w.head
+	bk.head = w.head
 }
 
-func copyAccount(a domain.Account) domain.Account {
-	if a.Metadata == nil {
-		return a
+func copyAccount(acct domain.Account) domain.Account {
+	if acct.Metadata == nil {
+		return acct
 	}
-	m := make(map[string]string, len(a.Metadata))
-	for k, v := range a.Metadata {
-		m[k] = v
+	copied := make(map[string]string, len(acct.Metadata))
+	for key, value := range acct.Metadata {
+		copied[key] = value
 	}
-	a.Metadata = m
-	return a
+	acct.Metadata = copied
+	return acct
 }
 
 var _ app.Store = (*Store)(nil)

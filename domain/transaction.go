@@ -103,32 +103,32 @@ func NewTransfer(from, to AccountName, amount Amount, effectiveAt time.Time) Tra
 // Validate enforces the double-entry rules that make a transaction admissible.
 // It checks shape only; whether the accounts exist and have room for the
 // postings is the engine's business, since that needs the ledger's state.
-func (t Transaction) Validate() error {
+func (tx Transaction) Validate() error {
 	switch {
-	case t.ID.IsZero():
+	case tx.ID.IsZero():
 		return fmt.Errorf("%w: transaction has no id", ErrInvalidTransaction)
-	case t.EffectiveAt.IsZero():
-		return fmt.Errorf("%w: transaction %s has no effective time", ErrInvalidTransaction, t.ID)
-	case len(t.Postings) < 2:
+	case tx.EffectiveAt.IsZero():
+		return fmt.Errorf("%w: transaction %s has no effective time", ErrInvalidTransaction, tx.ID)
+	case len(tx.Postings) < 2:
 		return fmt.Errorf("%w: transaction %s has %d postings, need at least 2",
-			ErrInvalidTransaction, t.ID, len(t.Postings))
-	case len(t.Postings) > MaxPostings:
+			ErrInvalidTransaction, tx.ID, len(tx.Postings))
+	case len(tx.Postings) > MaxPostings:
 		return fmt.Errorf("%w: transaction %s has %d postings, max %d",
-			ErrInvalidTransaction, t.ID, len(t.Postings), MaxPostings)
-	case len(t.Reference) > MaxReferenceLen:
+			ErrInvalidTransaction, tx.ID, len(tx.Postings), MaxPostings)
+	case len(tx.Reference) > MaxReferenceLen:
 		return fmt.Errorf("%w: reference is %d bytes, max %d",
-			ErrInvalidTransaction, len(t.Reference), MaxReferenceLen)
+			ErrInvalidTransaction, len(tx.Reference), MaxReferenceLen)
 	}
-	for i, p := range t.Postings {
-		if err := p.Validate(); err != nil {
+	for i, posting := range tx.Postings {
+		if err := posting.Validate(); err != nil {
 			return fmt.Errorf("posting %d: %w", i, err)
 		}
 	}
-	if err := validateMetadata(t.Metadata); err != nil {
+	if err := validateMetadata(tx.Metadata); err != nil {
 		return err
 	}
 
-	sums, err := t.Sums()
+	sums, err := tx.Sums()
 	if err != nil {
 		return err
 	}
@@ -138,7 +138,7 @@ func (t Transaction) Validate() error {
 	for _, cur := range sortedCurrencies(sums) {
 		if sum := sums[cur]; !sum.IsZero() {
 			return fmt.Errorf("%w: transaction %s does not balance in %s, off by %s",
-				ErrInvalidTransaction, t.ID, cur, sum)
+				ErrInvalidTransaction, tx.ID, cur, sum)
 		}
 	}
 	return nil
@@ -146,18 +146,18 @@ func (t Transaction) Validate() error {
 
 // Sums totals the postings per currency. A balanced transaction sums to zero
 // in every currency it touches.
-func (t Transaction) Sums() (map[Currency]Amount, error) {
+func (tx Transaction) Sums() (map[Currency]Amount, error) {
 	sums := make(map[Currency]Amount)
-	for i, p := range t.Postings {
-		cur := p.Amount.Currency()
+	for i, posting := range tx.Postings {
+		cur := posting.Amount.Currency()
 		running, ok := sums[cur]
 		if !ok {
 			running = Zero(cur)
 		}
-		next, err := running.Add(p.Amount)
+		next, err := running.Add(posting.Amount)
 		if err != nil {
 			return nil, fmt.Errorf("%w: transaction %s overflows in %s at posting %d",
-				ErrOverflow, t.ID, cur, i)
+				ErrOverflow, tx.ID, cur, i)
 		}
 		sums[cur] = next
 	}
@@ -166,19 +166,19 @@ func (t Transaction) Sums() (map[Currency]Amount, error) {
 
 // Currencies returns the currencies the transaction touches, in a stable
 // order.
-func (t Transaction) Currencies() []Currency {
-	seen := make(map[Currency]struct{}, len(t.Postings))
-	for _, p := range t.Postings {
-		seen[p.Amount.Currency()] = struct{}{}
+func (tx Transaction) Currencies() []Currency {
+	seen := make(map[Currency]struct{}, len(tx.Postings))
+	for _, posting := range tx.Postings {
+		seen[posting.Amount.Currency()] = struct{}{}
 	}
 	return sortedCurrencies(seen)
 }
 
 // Accounts returns the distinct accounts the transaction touches, sorted.
-func (t Transaction) Accounts() []AccountName {
-	seen := make(map[AccountName]struct{}, len(t.Postings))
-	for _, p := range t.Postings {
-		seen[p.Account] = struct{}{}
+func (tx Transaction) Accounts() []AccountName {
+	seen := make(map[AccountName]struct{}, len(tx.Postings))
+	for _, posting := range tx.Postings {
+		seen[posting.Account] = struct{}{}
 	}
 	out := make([]AccountName, 0, len(seen))
 	for name := range seen {
@@ -188,31 +188,31 @@ func (t Transaction) Accounts() []AccountName {
 	return out
 }
 
-// Reverse returns the transaction that undoes t: the same legs with their
+// Reverse returns the transaction that undoes tx: the same legs with their
 // signs flipped, effective at the given time.
 //
 // A reversal is a new transaction, never an edit. The original stays in the
 // book exactly as it was recorded, which is the difference between a ledger
 // that can be audited and one that can only be trusted.
-func (t Transaction) Reverse(id ID, effectiveAt time.Time) Transaction {
-	postings := make([]Posting, len(t.Postings))
-	for i, p := range t.Postings {
+func (tx Transaction) Reverse(id ID, effectiveAt time.Time) Transaction {
+	postings := make([]Posting, len(tx.Postings))
+	for i, posting := range tx.Postings {
 		postings[i] = Posting{
-			Account: p.Account,
-			Amount:  FromMinor(p.Amount.Currency(), -p.Amount.Minor()),
+			Account: posting.Account,
+			Amount:  FromMinor(posting.Amount.Currency(), -posting.Amount.Minor()),
 		}
 	}
 	return Transaction{
 		ID:          id,
 		EffectiveAt: effectiveAt,
 		Postings:    postings,
-		Reference:   t.Reference,
+		Reference:   tx.Reference,
 	}
 }
 
-func sortedCurrencies[V any](m map[Currency]V) []Currency {
-	out := make([]Currency, 0, len(m))
-	for cur := range m {
+func sortedCurrencies[V any](byCurrency map[Currency]V) []Currency {
+	out := make([]Currency, 0, len(byCurrency))
+	for cur := range byCurrency {
 		out = append(out, cur)
 	}
 	sort.Slice(out, func(i, j int) bool {

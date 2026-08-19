@@ -116,19 +116,19 @@ func (s *Store) Update(ctx context.Context, ledgerID string, fn func(context.Con
 	err = tx.QueryRow(ctx, `SELECT id FROM ledgers WHERE id = $1 FOR UPDATE`, ledgerID).Scan(&locked)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return fmt.Errorf("%w: ledger %q vanished", domain.ErrConflict, ledgerID)
+			return fmt.Errorf("%w: the row for ledger %q is gone", domain.ErrConflict, ledgerID)
 		}
 		return fmt.Errorf("pgstore: locking ledger %q: %w", ledgerID, err)
 	}
 
-	w, err := newWriter(ctx, ledgerID, tx)
+	writer, err := newWriter(ctx, ledgerID, tx)
 	if err != nil {
 		return err
 	}
-	if err := fn(ctx, w); err != nil {
+	if err := fn(ctx, writer); err != nil {
 		return err
 	}
-	if err := w.flush(ctx); err != nil {
+	if err := writer.flush(ctx); err != nil {
 		return err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -150,12 +150,12 @@ type querier interface {
 	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
 }
 
-func readHead(ctx context.Context, q querier, ledgerID string) (domain.Head, error) {
+func readHead(ctx context.Context, db querier, ledgerID string) (domain.Head, error) {
 	var (
 		seq  int64
 		hash []byte
 	)
-	err := q.QueryRow(ctx,
+	err := db.QueryRow(ctx,
 		`SELECT seq, hash FROM events WHERE ledger_id = $1 ORDER BY seq DESC LIMIT 1`,
 		ledgerID).Scan(&seq, &hash)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -171,14 +171,14 @@ const accountColumns = `name, currency_code, currency_scale, normal, allow_negat
 
 func scanAccount(row pgx.Row) (domain.Account, error) {
 	var (
-		a        domain.Account
+		acct     domain.Account
 		code     string
 		scale    int16
 		normal   string
 		metadata map[string]string
 		openedAt time.Time
 	)
-	err := row.Scan(&a.Name, &code, &scale, &normal, &a.AllowNegative, &metadata, &openedAt, &a.OpenedSeq)
+	err := row.Scan(&acct.Name, &code, &scale, &normal, &acct.AllowNegative, &metadata, &openedAt, &acct.OpenedSeq)
 	if err != nil {
 		return domain.Account{}, err
 	}
@@ -186,15 +186,15 @@ func scanAccount(row pgx.Row) (domain.Account, error) {
 	if err != nil {
 		return domain.Account{}, err
 	}
-	a.Currency = cur
-	if a.Normal, err = domain.ParseNormal(normal); err != nil {
+	acct.Currency = cur
+	if acct.Normal, err = domain.ParseNormal(normal); err != nil {
 		return domain.Account{}, err
 	}
 	if len(metadata) > 0 {
-		a.Metadata = metadata
+		acct.Metadata = metadata
 	}
-	a.OpenedAt = readTime(openedAt)
-	return a, nil
+	acct.OpenedAt = readTime(openedAt)
+	return acct, nil
 }
 
 // Account implements [app.Store].
@@ -202,8 +202,8 @@ func (s *Store) Account(ctx context.Context, ledgerID string, name domain.Accoun
 	return readAccount(ctx, s.pool, ledgerID, name)
 }
 
-func readAccount(ctx context.Context, q querier, ledgerID string, name domain.AccountName) (domain.Account, error) {
-	row := q.QueryRow(ctx,
+func readAccount(ctx context.Context, db querier, ledgerID string, name domain.AccountName) (domain.Account, error) {
+	row := db.QueryRow(ctx,
 		`SELECT `+accountColumns+` FROM accounts WHERE ledger_id = $1 AND name = $2`,
 		ledgerID, string(name))
 	acct, err := scanAccount(row)
@@ -261,7 +261,7 @@ func (s *Store) Transaction(ctx context.Context, ledgerID string, id domain.ID) 
 	return tx, nil
 }
 
-func readTransaction(ctx context.Context, q querier, ledgerID string, id domain.ID) (domain.RecordedTransaction, bool, error) {
+func readTransaction(ctx context.Context, db querier, ledgerID string, id domain.ID) (domain.RecordedTransaction, bool, error) {
 	var (
 		rec         domain.RecordedTransaction
 		effectiveAt time.Time
@@ -270,7 +270,7 @@ func readTransaction(ctx context.Context, q querier, ledgerID string, id domain.
 		reverts     pgtype.UUID
 		revertedBy  pgtype.UUID
 	)
-	err := q.QueryRow(ctx, `
+	err := db.QueryRow(ctx, `
 		SELECT seq, effective_at, recorded_at, reference, metadata, reverts, reverted_by
 		FROM transactions WHERE ledger_id = $1 AND tx_id = $2`,
 		ledgerID, toUUID(id),
@@ -293,7 +293,7 @@ func readTransaction(ctx context.Context, q querier, ledgerID string, id domain.
 
 	// The postings come from the read model rather than from the event, so a
 	// transaction reads the same way whether or not the log is at hand.
-	rows, err := q.Query(ctx, `
+	rows, err := db.Query(ctx, `
 		SELECT account, amount_minor, currency_code, currency_scale
 		FROM entries WHERE ledger_id = $1 AND tx_id = $2 ORDER BY seq, idx`,
 		ledgerID, toUUID(id))
@@ -325,20 +325,20 @@ func readTransaction(ctx context.Context, q querier, ledgerID string, id domain.
 
 // Balance implements [app.Store]. Both time axes are pushed into SQL, so a
 // bitemporal balance is one indexed aggregate rather than a scan in Go.
-func (s *Store) Balance(ctx context.Context, ledgerID string, q domain.BalanceQuery) (domain.Amount, error) {
+func (s *Store) Balance(ctx context.Context, ledgerID string, query domain.BalanceQuery) (domain.Amount, error) {
 	var (
 		asOfEffective any
 		asOfSeq       any
 		asOfRecorded  any
 	)
-	if !q.AsOfEffective.IsZero() {
-		asOfEffective = q.AsOfEffective.UTC()
+	if !query.AsOfEffective.IsZero() {
+		asOfEffective = query.AsOfEffective.UTC()
 	}
 	// A sequence bound is exact, so it supersedes a timestamp bound.
-	if q.AsOfSeq > 0 {
-		asOfSeq = q.AsOfSeq
-	} else if !q.AsOfRecorded.IsZero() {
-		asOfRecorded = q.AsOfRecorded.UTC()
+	if query.AsOfSeq > 0 {
+		asOfSeq = query.AsOfSeq
+	} else if !query.AsOfRecorded.IsZero() {
+		asOfRecorded = query.AsOfRecorded.UTC()
 	}
 
 	var (
@@ -358,13 +358,13 @@ func (s *Store) Balance(ctx context.Context, ledgerID string, q domain.BalanceQu
 		      AND ($5::timestamptz IS NULL OR e.recorded_at  <= $5)
 		WHERE a.ledger_id = $1 AND a.name = $2
 		GROUP BY a.currency_code, a.currency_scale`,
-		ledgerID, string(q.Account), asOfEffective, asOfSeq, asOfRecorded,
+		ledgerID, string(query.Account), asOfEffective, asOfSeq, asOfRecorded,
 	).Scan(&code, &scale, &minor)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return domain.Amount{}, fmt.Errorf("%w: %q", domain.ErrAccountNotFound, q.Account)
+		return domain.Amount{}, fmt.Errorf("%w: %q", domain.ErrAccountNotFound, query.Account)
 	}
 	if err != nil {
-		return domain.Amount{}, wrapNumericOverflow(err, fmt.Sprintf("balance of %q", q.Account))
+		return domain.Amount{}, wrapNumericOverflow(err, fmt.Sprintf("balance of %q", query.Account))
 	}
 
 	cur, err := domain.NewCurrency(code, uint8(scale))
@@ -375,55 +375,55 @@ func (s *Store) Balance(ctx context.Context, ledgerID string, q domain.BalanceQu
 }
 
 // Entries implements [app.Store].
-func (s *Store) Entries(ctx context.Context, ledgerID string, q domain.EntryQuery) ([]domain.Entry, error) {
-	if q.Account != "" && q.AccountPrefix != "" {
+func (s *Store) Entries(ctx context.Context, ledgerID string, query domain.EntryQuery) ([]domain.Entry, error) {
+	if query.Account != "" && query.AccountPrefix != "" {
 		return nil, fmt.Errorf("%w: set Account or AccountPrefix, not both", domain.ErrInvalidAccount)
 	}
-	limit := q.Limit
+	limit := query.Limit
 	if limit <= 0 {
 		limit = DefaultLimit
 	}
 
-	var b condBuilder
-	b.add(`ledger_id = `, ledgerID)
-	if q.Account != "" {
-		b.add(`account = `, string(q.Account))
+	var conds condBuilder
+	conds.add(`ledger_id = `, ledgerID)
+	if query.Account != "" {
+		conds.add(`account = `, string(query.Account))
 	}
-	if q.AccountPrefix != "" {
-		b.raw(`(account = ` + b.next(string(q.AccountPrefix)) + ` OR account LIKE ` +
-			b.next(escapeLike(string(q.AccountPrefix))+`:%`) + `)`)
+	if query.AccountPrefix != "" {
+		conds.raw(`(account = ` + conds.next(string(query.AccountPrefix)) + ` OR account LIKE ` +
+			conds.next(escapeLike(string(query.AccountPrefix))+`:%`) + `)`)
 	}
-	if !q.TxID.IsZero() {
-		b.add(`tx_id = `, toUUID(q.TxID))
+	if !query.TxID.IsZero() {
+		conds.add(`tx_id = `, toUUID(query.TxID))
 	}
-	if !q.EffectiveFrom.IsZero() {
-		b.add(`effective_at >= `, q.EffectiveFrom.UTC())
+	if !query.EffectiveFrom.IsZero() {
+		conds.add(`effective_at >= `, query.EffectiveFrom.UTC())
 	}
-	if !q.EffectiveTo.IsZero() {
-		b.add(`effective_at <= `, q.EffectiveTo.UTC())
+	if !query.EffectiveTo.IsZero() {
+		conds.add(`effective_at <= `, query.EffectiveTo.UTC())
 	}
-	if !q.RecordedFrom.IsZero() {
-		b.add(`recorded_at >= `, q.RecordedFrom.UTC())
+	if !query.RecordedFrom.IsZero() {
+		conds.add(`recorded_at >= `, query.RecordedFrom.UTC())
 	}
-	if !q.RecordedTo.IsZero() {
-		b.add(`recorded_at <= `, q.RecordedTo.UTC())
+	if !query.RecordedTo.IsZero() {
+		conds.add(`recorded_at <= `, query.RecordedTo.UTC())
 	}
-	if q.FromSeq > 0 {
-		b.add(`seq >= `, q.FromSeq)
+	if query.FromSeq > 0 {
+		conds.add(`seq >= `, query.FromSeq)
 	}
-	if q.ToSeq > 0 {
-		b.add(`seq <= `, q.ToSeq)
+	if query.ToSeq > 0 {
+		conds.add(`seq <= `, query.ToSeq)
 	}
-	if q.AfterSeq > 0 {
-		b.raw(`(seq, idx) > (` + b.next(q.AfterSeq) + `, ` + b.next(q.AfterIndex) + `)`)
+	if query.AfterSeq > 0 {
+		conds.raw(`(seq, idx) > (` + conds.next(query.AfterSeq) + `, ` + conds.next(query.AfterIndex) + `)`)
 	}
 
 	sql := `SELECT seq, idx, account, amount_minor, currency_code, currency_scale,
 	               tx_id, reference, effective_at, recorded_at, reverts
-	        FROM entries WHERE ` + b.where() +
-		` ORDER BY seq, idx LIMIT ` + b.next(limit)
+	        FROM entries WHERE ` + conds.where() +
+		` ORDER BY seq, idx LIMIT ` + conds.next(limit)
 
-	rows, err := s.pool.Query(ctx, sql, b.args...)
+	rows, err := s.pool.Query(ctx, sql, conds.args...)
 	if err != nil {
 		return nil, fmt.Errorf("pgstore: listing entries: %w", err)
 	}
@@ -432,7 +432,7 @@ func (s *Store) Entries(ctx context.Context, ledgerID string, q domain.EntryQuer
 	var out []domain.Entry
 	for rows.Next() {
 		var (
-			e           domain.Entry
+			entry       domain.Entry
 			minor       int64
 			code        string
 			scale       int16
@@ -441,8 +441,8 @@ func (s *Store) Entries(ctx context.Context, ledgerID string, q domain.EntryQuer
 			effectiveAt time.Time
 			recordedAt  time.Time
 		)
-		err := rows.Scan(&e.Seq, &e.Index, &e.Account, &minor, &code, &scale,
-			&txID, &e.Reference, &effectiveAt, &recordedAt, &reverts)
+		err := rows.Scan(&entry.Seq, &entry.Index, &entry.Account, &minor, &code, &scale,
+			&txID, &entry.Reference, &effectiveAt, &recordedAt, &reverts)
 		if err != nil {
 			return nil, fmt.Errorf("pgstore: listing entries: %w", err)
 		}
@@ -450,12 +450,12 @@ func (s *Store) Entries(ctx context.Context, ledgerID string, q domain.EntryQuer
 		if err != nil {
 			return nil, err
 		}
-		e.Amount = domain.FromMinor(cur, minor)
-		e.TxID = fromUUID(txID)
-		e.Reverts = fromUUID(reverts)
-		e.EffectiveAt = readTime(effectiveAt)
-		e.RecordedAt = readTime(recordedAt)
-		out = append(out, e)
+		entry.Amount = domain.FromMinor(cur, minor)
+		entry.TxID = fromUUID(txID)
+		entry.Reverts = fromUUID(reverts)
+		entry.EffectiveAt = readTime(effectiveAt)
+		entry.RecordedAt = readTime(recordedAt)
+		out = append(out, entry)
 	}
 	return out, rows.Err()
 }
@@ -483,7 +483,7 @@ func (s *Store) Events(ctx context.Context, ledgerID string, fromSeq int64, limi
 	var out []domain.Event
 	for rows.Next() {
 		var (
-			e          domain.Event
+			event      domain.Event
 			eventID    pgtype.UUID
 			payload    string
 			key        *string
@@ -491,20 +491,20 @@ func (s *Store) Events(ctx context.Context, ledgerID string, fromSeq int64, limi
 			hash       []byte
 			recordedAt time.Time
 		)
-		err := rows.Scan(&e.Seq, &eventID, &e.Type, &payload, &recordedAt, &key, &prevHash, &hash)
+		err := rows.Scan(&event.Seq, &eventID, &event.Type, &payload, &recordedAt, &key, &prevHash, &hash)
 		if err != nil {
 			return nil, fmt.Errorf("pgstore: reading events: %w", err)
 		}
-		e.LedgerID = ledgerID
-		e.ID = fromUUID(eventID)
-		e.Payload = []byte(payload)
-		e.RecordedAt = readTime(recordedAt)
+		event.LedgerID = ledgerID
+		event.ID = fromUUID(eventID)
+		event.Payload = []byte(payload)
+		event.RecordedAt = readTime(recordedAt)
 		if key != nil {
-			e.IdempotencyKey = *key
+			event.IdempotencyKey = *key
 		}
-		e.PrevHash = toHash(prevHash)
-		e.Hash = toHash(hash)
-		out = append(out, e)
+		event.PrevHash = toHash(prevHash)
+		event.Hash = toHash(hash)
+		out = append(out, event)
 	}
 	return out, rows.Err()
 }
@@ -517,13 +517,13 @@ type condBuilder struct {
 }
 
 // next records an argument and returns its placeholder.
-func (b *condBuilder) next(v any) string {
-	b.args = append(b.args, v)
+func (b *condBuilder) next(arg any) string {
+	b.args = append(b.args, arg)
 	return fmt.Sprintf("$%d", len(b.args))
 }
 
-func (b *condBuilder) add(expr string, v any) {
-	b.conds = append(b.conds, expr+b.next(v))
+func (b *condBuilder) add(expr string, arg any) {
+	b.conds = append(b.conds, expr+b.next(arg))
 }
 
 func (b *condBuilder) raw(cond string) { b.conds = append(b.conds, cond) }
@@ -532,16 +532,16 @@ func (b *condBuilder) where() string { return strings.Join(b.conds, " AND ") }
 
 // escapeLike neutralizes the wildcards in a LIKE pattern so an account named
 // "assets:100%" cannot match a subtree it does not own.
-func escapeLike(s string) string {
-	r := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
-	return r.Replace(s)
+func escapeLike(pattern string) string {
+	replacer := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+	return replacer.Replace(pattern)
 }
 
 // readTime puts a timestamp back into the ledger's single representation. The
 // values were written as UTC truncated to microseconds, so this restores the
 // exact instant -- and, just as importantly, the same time.Location, so
 // entries read back compare equal to the ones a replay produces.
-func readTime(t time.Time) time.Time { return t.UTC() }
+func readTime(at time.Time) time.Time { return at.UTC() }
 
 func toUUID(id domain.ID) pgtype.UUID {
 	if id.IsZero() {
@@ -550,17 +550,17 @@ func toUUID(id domain.ID) pgtype.UUID {
 	return pgtype.UUID{Bytes: id, Valid: true}
 }
 
-func fromUUID(u pgtype.UUID) domain.ID {
-	if !u.Valid {
+func fromUUID(uuid pgtype.UUID) domain.ID {
+	if !uuid.Valid {
 		return domain.ID{}
 	}
-	return domain.ID(u.Bytes)
+	return domain.ID(uuid.Bytes)
 }
 
-func toHash(b []byte) [32]byte {
-	var h [32]byte
-	copy(h[:], b)
-	return h
+func toHash(raw []byte) [32]byte {
+	var hash [32]byte
+	copy(hash[:], raw)
+	return hash
 }
 
 // wrapNumericOverflow turns PostgreSQL's out-of-range error into the ledger's

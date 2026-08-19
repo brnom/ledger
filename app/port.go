@@ -30,10 +30,10 @@ type Store interface {
 	// Balance sums the entries a query selects. The result is signed and
 	// debit-positive; use [domain.Account.Presented] to show it the account's
 	// way.
-	Balance(ctx context.Context, ledgerID string, q domain.BalanceQuery) (domain.Amount, error)
+	Balance(ctx context.Context, ledgerID string, query domain.BalanceQuery) (domain.Amount, error)
 
 	// Entries lists entries in (Seq, Index) order.
-	Entries(ctx context.Context, ledgerID string, q domain.EntryQuery) ([]domain.Entry, error)
+	Entries(ctx context.Context, ledgerID string, query domain.EntryQuery) ([]domain.Entry, error)
 
 	// Transaction returns one transaction, or [domain.ErrTransactionNotFound].
 	Transaction(ctx context.Context, ledgerID string, id domain.ID) (domain.RecordedTransaction, error)
@@ -72,7 +72,7 @@ type Writer interface {
 
 	// Stage seals an event onto the end of the stream and records the entries
 	// it projects. Nothing is durable until Update's callback returns nil.
-	Stage(e *domain.Event) error
+	Stage(event *domain.Event) error
 
 	// StageIdempotency records the outcome of a keyed command.
 	StageIdempotency(rec domain.IdempotencyRecord) error

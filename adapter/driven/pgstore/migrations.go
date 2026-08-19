@@ -30,15 +30,15 @@ func loadMigrations() ([]migration, error) {
 		return nil, err
 	}
 	out := make([]migration, 0, len(entries))
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".sql") {
+	for _, file := range entries {
+		if file.IsDir() || !strings.HasSuffix(file.Name(), ".sql") {
 			continue
 		}
-		body, err := migrationFS.ReadFile("migrations/" + e.Name())
+		body, err := migrationFS.ReadFile("migrations/" + file.Name())
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, migration{name: e.Name(), sql: string(body)})
+		out = append(out, migration{name: file.Name(), sql: string(body)})
 	}
 	// Filenames are zero-padded and ordered, so lexical order is apply order.
 	sort.Slice(out, func(i, j int) bool { return out[i].name < out[j].name })
@@ -90,22 +90,22 @@ func (s *Store) Migrate(ctx context.Context) error {
 		return err
 	}
 
-	for _, m := range migrations {
-		if applied[m.name] {
+	for _, mig := range migrations {
+		if applied[mig.name] {
 			continue
 		}
 		// Each migration is its own transaction, so a failure halfway through
 		// the set leaves the schema at the last complete step rather than in
 		// an unnamed state.
 		err := pgx.BeginFunc(ctx, conn, func(tx pgx.Tx) error {
-			if _, err := tx.Exec(ctx, m.sql); err != nil {
+			if _, err := tx.Exec(ctx, mig.sql); err != nil {
 				return err
 			}
-			_, err := tx.Exec(ctx, `INSERT INTO schema_migrations (name) VALUES ($1)`, m.name)
+			_, err := tx.Exec(ctx, `INSERT INTO schema_migrations (name) VALUES ($1)`, mig.name)
 			return err
 		})
 		if err != nil {
-			return fmt.Errorf("pgstore: applying %s: %w", m.name, err)
+			return fmt.Errorf("pgstore: applying %s: %w", mig.name, err)
 		}
 	}
 	return nil

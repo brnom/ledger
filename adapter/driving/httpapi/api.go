@@ -70,13 +70,13 @@ type Server struct {
 }
 
 // New returns a server for the given ledger. A nil logger discards output.
-func New(l Ledger, log *slog.Logger) *Server {
+func New(ledger Ledger, log *slog.Logger) *Server {
 	if log == nil {
 		log = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
-	s := &Server{ledger: l, log: log, mux: http.NewServeMux()}
-	s.routes()
-	return s
+	srv := &Server{ledger: ledger, log: log, mux: http.NewServeMux()}
+	srv.routes()
+	return srv
 }
 
 // ServeHTTP implements [http.Handler].
@@ -147,16 +147,16 @@ type accountResponse struct {
 	OpenedSeq     int64              `json:"opened_seq"`
 }
 
-func newAccountResponse(a domain.Account) accountResponse {
+func newAccountResponse(acct domain.Account) accountResponse {
 	return accountResponse{
-		Name:          a.Name,
-		Currency:      a.Currency.Code,
-		Scale:         a.Currency.Scale,
-		Normal:        a.Normal.String(),
-		AllowNegative: a.AllowNegative,
-		Metadata:      a.Metadata,
-		OpenedAt:      a.OpenedAt,
-		OpenedSeq:     a.OpenedSeq,
+		Name:          acct.Name,
+		Currency:      acct.Currency.Code,
+		Scale:         acct.Currency.Scale,
+		Normal:        acct.Normal.String(),
+		AllowNegative: acct.AllowNegative,
+		Metadata:      acct.Metadata,
+		OpenedAt:      acct.OpenedAt,
+		OpenedSeq:     acct.OpenedSeq,
 	}
 }
 
@@ -219,8 +219,8 @@ func (s *Server) handleListAccounts(w http.ResponseWriter, r *http.Request) erro
 		return err
 	}
 	out := make([]accountResponse, len(accts))
-	for i, a := range accts {
-		out[i] = newAccountResponse(a)
+	for i, acct := range accts {
+		out[i] = newAccountResponse(acct)
 	}
 	s.writeJSON(w, r, http.StatusOK, map[string]any{"accounts": out})
 	return nil
@@ -250,17 +250,17 @@ type balanceResponse struct {
 
 func (s *Server) handleBalance(w http.ResponseWriter, r *http.Request) error {
 	name := domain.AccountName(r.PathValue("name"))
-	q := r.URL.Query()
+	params := r.URL.Query()
 
 	query := domain.BalanceQuery{Account: name}
 	var err error
-	if query.AsOfEffective, err = optionalTime(q, "as_of_effective"); err != nil {
+	if query.AsOfEffective, err = optionalTime(params, "as_of_effective"); err != nil {
 		return err
 	}
-	if query.AsOfRecorded, err = optionalTime(q, "as_of_recorded"); err != nil {
+	if query.AsOfRecorded, err = optionalTime(params, "as_of_recorded"); err != nil {
 		return err
 	}
-	if query.AsOfSeq, err = optionalInt64(q, "as_of_seq"); err != nil {
+	if query.AsOfSeq, err = optionalInt64(params, "as_of_seq"); err != nil {
 		return err
 	}
 
@@ -430,16 +430,16 @@ type postingResponse struct {
 	Direction string             `json:"direction"`
 }
 
-func newPostingResponse(p domain.Posting) postingResponse {
+func newPostingResponse(posting domain.Posting) postingResponse {
 	direction := "credit"
-	if p.IsDebit() {
+	if posting.IsDebit() {
 		direction = "debit"
 	}
 	return postingResponse{
-		Account:   p.Account,
-		Amount:    p.Amount.Format(),
-		Currency:  p.Amount.Currency().Code,
-		Scale:     p.Amount.Currency().Scale,
+		Account:   posting.Account,
+		Amount:    posting.Amount.Format(),
+		Currency:  posting.Amount.Currency().Code,
+		Scale:     posting.Amount.Currency().Scale,
 		Direction: direction,
 	}
 }
@@ -463,8 +463,8 @@ func (s *Server) handleGetTransaction(w http.ResponseWriter, r *http.Request) er
 		Metadata:    rec.Metadata,
 		Postings:    make([]postingResponse, len(rec.Postings)),
 	}
-	for i, p := range rec.Postings {
-		resp.Postings[i] = newPostingResponse(p)
+	for i, posting := range rec.Postings {
+		resp.Postings[i] = newPostingResponse(posting)
 	}
 	if !rec.Reverts.IsZero() {
 		resp.Reverts = rec.Reverts.String()
@@ -493,62 +493,62 @@ type entryResponse struct {
 	Reverts     string             `json:"reverts,omitempty"`
 }
 
-func newEntryResponse(e domain.Entry) entryResponse {
+func newEntryResponse(entry domain.Entry) entryResponse {
 	direction := "credit"
-	if e.Amount.Sign() > 0 {
+	if entry.Amount.Sign() > 0 {
 		direction = "debit"
 	}
 	out := entryResponse{
-		Seq:         e.Seq,
-		Index:       e.Index,
-		Account:     e.Account,
-		Amount:      e.Amount.Format(),
-		Currency:    e.Amount.Currency().Code,
-		Scale:       e.Amount.Currency().Scale,
+		Seq:         entry.Seq,
+		Index:       entry.Index,
+		Account:     entry.Account,
+		Amount:      entry.Amount.Format(),
+		Currency:    entry.Amount.Currency().Code,
+		Scale:       entry.Amount.Currency().Scale,
 		Direction:   direction,
-		TxID:        e.TxID.String(),
-		Reference:   e.Reference,
-		EffectiveAt: e.EffectiveAt,
-		RecordedAt:  e.RecordedAt,
+		TxID:        entry.TxID.String(),
+		Reference:   entry.Reference,
+		EffectiveAt: entry.EffectiveAt,
+		RecordedAt:  entry.RecordedAt,
 	}
-	if !e.Reverts.IsZero() {
-		out.Reverts = e.Reverts.String()
+	if !entry.Reverts.IsZero() {
+		out.Reverts = entry.Reverts.String()
 	}
 	return out
 }
 
 func (s *Server) handleAccountEntries(w http.ResponseWriter, r *http.Request) error {
-	q, err := parseEntryQuery(r)
+	query, err := parseEntryQuery(r)
 	if err != nil {
 		return err
 	}
-	q.Account = domain.AccountName(r.PathValue("name"))
-	q.AccountPrefix = ""
-	return s.serveEntries(w, r, q)
+	query.Account = domain.AccountName(r.PathValue("name"))
+	query.AccountPrefix = ""
+	return s.serveEntries(w, r, query)
 }
 
 func (s *Server) handleEntries(w http.ResponseWriter, r *http.Request) error {
-	q, err := parseEntryQuery(r)
+	query, err := parseEntryQuery(r)
 	if err != nil {
 		return err
 	}
-	return s.serveEntries(w, r, q)
+	return s.serveEntries(w, r, query)
 }
 
-func (s *Server) serveEntries(w http.ResponseWriter, r *http.Request, q domain.EntryQuery) error {
-	entries, err := s.ledger.Entries(r.Context(), q)
+func (s *Server) serveEntries(w http.ResponseWriter, r *http.Request, query domain.EntryQuery) error {
+	entries, err := s.ledger.Entries(r.Context(), query)
 	if err != nil {
 		return err
 	}
 	out := make([]entryResponse, len(entries))
-	for i, e := range entries {
-		out[i] = newEntryResponse(e)
+	for i, entry := range entries {
+		out[i] = newEntryResponse(entry)
 	}
 
 	body := map[string]any{"entries": out}
 	// A cursor is present exactly when a full page came back, which is the
 	// only case where more entries might exist.
-	if q.Limit > 0 && len(entries) == q.Limit {
+	if query.Limit > 0 && len(entries) == query.Limit {
 		last := entries[len(entries)-1]
 		body["next"] = map[string]any{"after_seq": last.Seq, "after_index": last.Index}
 	}
@@ -557,50 +557,50 @@ func (s *Server) serveEntries(w http.ResponseWriter, r *http.Request, q domain.E
 }
 
 func parseEntryQuery(r *http.Request) (domain.EntryQuery, error) {
-	v := r.URL.Query()
+	params := r.URL.Query()
 	var (
-		q   domain.EntryQuery
-		err error
+		query domain.EntryQuery
+		err   error
 	)
-	q.AccountPrefix = domain.AccountName(v.Get("prefix"))
-	q.Account = domain.AccountName(v.Get("account"))
-	if id := v.Get("transaction_id"); id != "" {
-		if q.TxID, err = domain.ParseID(id); err != nil {
-			return q, err
+	query.AccountPrefix = domain.AccountName(params.Get("prefix"))
+	query.Account = domain.AccountName(params.Get("account"))
+	if id := params.Get("transaction_id"); id != "" {
+		if query.TxID, err = domain.ParseID(id); err != nil {
+			return query, err
 		}
 	}
-	if q.EffectiveFrom, err = optionalTime(v, "effective_from"); err != nil {
-		return q, err
+	if query.EffectiveFrom, err = optionalTime(params, "effective_from"); err != nil {
+		return query, err
 	}
-	if q.EffectiveTo, err = optionalTime(v, "effective_to"); err != nil {
-		return q, err
+	if query.EffectiveTo, err = optionalTime(params, "effective_to"); err != nil {
+		return query, err
 	}
-	if q.RecordedFrom, err = optionalTime(v, "recorded_from"); err != nil {
-		return q, err
+	if query.RecordedFrom, err = optionalTime(params, "recorded_from"); err != nil {
+		return query, err
 	}
-	if q.RecordedTo, err = optionalTime(v, "recorded_to"); err != nil {
-		return q, err
+	if query.RecordedTo, err = optionalTime(params, "recorded_to"); err != nil {
+		return query, err
 	}
-	if q.FromSeq, err = optionalInt64(v, "from_seq"); err != nil {
-		return q, err
+	if query.FromSeq, err = optionalInt64(params, "from_seq"); err != nil {
+		return query, err
 	}
-	if q.ToSeq, err = optionalInt64(v, "to_seq"); err != nil {
-		return q, err
+	if query.ToSeq, err = optionalInt64(params, "to_seq"); err != nil {
+		return query, err
 	}
-	if q.AfterSeq, err = optionalInt64(v, "after_seq"); err != nil {
-		return q, err
+	if query.AfterSeq, err = optionalInt64(params, "after_seq"); err != nil {
+		return query, err
 	}
-	after, err := optionalInt64(v, "after_index")
+	after, err := optionalInt64(params, "after_index")
 	if err != nil {
-		return q, err
+		return query, err
 	}
-	q.AfterIndex = int(after)
-	limit, err := optionalInt64(v, "limit")
+	query.AfterIndex = int(after)
+	limit, err := optionalInt64(params, "limit")
 	if err != nil {
-		return q, err
+		return query, err
 	}
-	q.Limit = int(limit)
-	return q, nil
+	query.Limit = int(limit)
+	return query, nil
 }
 
 // --- events and verification ---
@@ -617,12 +617,12 @@ type eventResponse struct {
 }
 
 func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) error {
-	v := r.URL.Query()
-	fromSeq, err := optionalInt64(v, "from_seq")
+	params := r.URL.Query()
+	fromSeq, err := optionalInt64(params, "from_seq")
 	if err != nil {
 		return err
 	}
-	limit, err := optionalInt64(v, "limit")
+	limit, err := optionalInt64(params, "limit")
 	if err != nil {
 		return err
 	}
@@ -632,16 +632,16 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	out := make([]eventResponse, len(events))
-	for i, e := range events {
+	for i, event := range events {
 		out[i] = eventResponse{
-			Seq:            e.Seq,
-			ID:             e.ID.String(),
-			Type:           string(e.Type),
-			Payload:        json.RawMessage(e.Payload),
-			RecordedAt:     e.RecordedAt,
-			IdempotencyKey: e.IdempotencyKey,
-			PrevHash:       fmt.Sprintf("%x", e.PrevHash),
-			Hash:           fmt.Sprintf("%x", e.Hash),
+			Seq:            event.Seq,
+			ID:             event.ID.String(),
+			Type:           string(event.Type),
+			Payload:        json.RawMessage(event.Payload),
+			RecordedAt:     event.RecordedAt,
+			IdempotencyKey: event.IdempotencyKey,
+			PrevHash:       fmt.Sprintf("%x", event.PrevHash),
+			Hash:           fmt.Sprintf("%x", event.Hash),
 		}
 	}
 	s.writeJSON(w, r, http.StatusOK, map[string]any{"events": out})
@@ -664,25 +664,25 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) error {
 // --- decoding helpers ---
 
 func decode[T any](r *http.Request) (T, error) {
-	var v T
+	var decoded T
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
-	if err := dec.Decode(&v); err != nil {
-		return v, errBadRequest(fmt.Errorf("parsing body: %w", err))
+	if err := dec.Decode(&decoded); err != nil {
+		return decoded, errBadRequest(fmt.Errorf("parsing body: %w", err))
 	}
-	return v, nil
+	return decoded, nil
 }
 
 // decodeOptional accepts an empty body, for endpoints where every field has a
 // sensible default.
 func decodeOptional[T any](r *http.Request) (T, error) {
-	var v T
+	var decoded T
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
-	if err := dec.Decode(&v); err != nil && !errors.Is(err, io.EOF) {
-		return v, errBadRequest(fmt.Errorf("parsing body: %w", err))
+	if err := dec.Decode(&decoded); err != nil && !errors.Is(err, io.EOF) {
+		return decoded, errBadRequest(fmt.Errorf("parsing body: %w", err))
 	}
-	return v, nil
+	return decoded, nil
 }
 
 // resolveCurrency turns a code and an optional scale into a currency. Omitting
@@ -703,42 +703,42 @@ func resolveCurrency(code string, scale *uint8) (domain.Currency, error) {
 
 func parsePostings(reqs []postingRequest) ([]domain.Posting, error) {
 	out := make([]domain.Posting, len(reqs))
-	for i, p := range reqs {
-		cur, err := resolveCurrency(p.Currency, p.Scale)
+	for i, posting := range reqs {
+		cur, err := resolveCurrency(posting.Currency, posting.Scale)
 		if err != nil {
 			return nil, fmt.Errorf("posting %d: %w", i, err)
 		}
-		amount, err := domain.ParseAmount(cur, p.Amount)
+		amount, err := domain.ParseAmount(cur, posting.Amount)
 		if err != nil {
 			return nil, fmt.Errorf("posting %d: %w", i, err)
 		}
-		out[i] = domain.Posting{Account: p.Account, Amount: amount}
+		out[i] = domain.Posting{Account: posting.Account, Amount: amount}
 	}
 	return out, nil
 }
 
 type values interface{ Get(string) string }
 
-func optionalTime(v values, key string) (time.Time, error) {
-	raw := v.Get(key)
+func optionalTime(params values, key string) (time.Time, error) {
+	raw := params.Get(key)
 	if raw == "" {
 		return time.Time{}, nil
 	}
-	t, err := time.Parse(time.RFC3339, raw)
+	parsed, err := time.Parse(time.RFC3339, raw)
 	if err != nil {
 		return time.Time{}, errBadRequest(fmt.Errorf("%s must be an RFC 3339 timestamp: %w", key, err))
 	}
-	return t, nil
+	return parsed, nil
 }
 
-func optionalInt64(v values, key string) (int64, error) {
-	raw := v.Get(key)
+func optionalInt64(params values, key string) (int64, error) {
+	raw := params.Get(key)
 	if raw == "" {
 		return 0, nil
 	}
-	n, err := strconv.ParseInt(raw, 10, 64)
+	parsed, err := strconv.ParseInt(raw, 10, 64)
 	if err != nil {
 		return 0, errBadRequest(fmt.Errorf("%s must be an integer: %w", key, err))
 	}
-	return n, nil
+	return parsed, nil
 }

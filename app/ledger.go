@@ -41,17 +41,17 @@ type Option func(*Ledger)
 // WithClock replaces the ledger's source of time. Tests use it to make
 // recorded timestamps deterministic.
 func WithClock(now func() time.Time) Option {
-	return func(l *Ledger) { l.now = now }
+	return func(ledger *Ledger) { ledger.now = now }
 }
 
 // WithBackdateLimit sets how far into the past an entry may be dated.
 func WithBackdateLimit(d time.Duration) Option {
-	return func(l *Ledger) { l.backdateLimit = d }
+	return func(ledger *Ledger) { ledger.backdateLimit = d }
 }
 
 // WithFutureLimit sets how far ahead an entry may be dated.
 func WithFutureLimit(d time.Duration) Option {
-	return func(l *Ledger) { l.futureLimit = d }
+	return func(ledger *Ledger) { ledger.futureLimit = d }
 }
 
 // Open returns a handle on the named ledger in store.
@@ -62,7 +62,7 @@ func Open(store Store, ledgerID string, opts ...Option) (*Ledger, error) {
 	if err := domain.ValidateLedgerID(ledgerID); err != nil {
 		return nil, err
 	}
-	l := &Ledger{
+	ledger := &Ledger{
 		store:         store,
 		id:            ledgerID,
 		now:           time.Now,
@@ -70,17 +70,17 @@ func Open(store Store, ledgerID string, opts ...Option) (*Ledger, error) {
 		futureLimit:   DefaultFutureLimit,
 	}
 	for _, opt := range opts {
-		opt(l)
+		opt(ledger)
 	}
-	return l, nil
+	return ledger, nil
 }
 
 // ID returns the ledger's identifier.
-func (l *Ledger) ID() string { return l.id }
+func (ledger *Ledger) ID() string { return ledger.id }
 
 // OpenAccount opens an account in the ledger.
-func (l *Ledger) OpenAccount(ctx context.Context, cmd OpenAccountCommand) (domain.Account, Result, error) {
-	fp, err := domain.FingerprintOpenAccount(cmd.Name, cmd.Currency, cmd.Normal,
+func (ledger *Ledger) OpenAccount(ctx context.Context, cmd OpenAccountCommand) (domain.Account, Result, error) {
+	fingerprint, err := domain.FingerprintOpenAccount(cmd.Name, cmd.Currency, cmd.Normal,
 		cmd.AllowNegative, cmd.EffectiveAt, cmd.Metadata)
 	if err != nil {
 		return domain.Account{}, Result{}, err
@@ -90,8 +90,8 @@ func (l *Ledger) OpenAccount(ctx context.Context, cmd OpenAccountCommand) (domai
 		acct domain.Account
 		res  Result
 	)
-	err = l.store.Update(ctx, l.id, func(ctx context.Context, w Writer) error {
-		replayed, err := l.replayIdempotent(w, cmd.IdempotencyKey, fp, &res)
+	err = ledger.store.Update(ctx, ledger.id, func(ctx context.Context, writer Writer) error {
+		replayed, err := ledger.replayIdempotent(writer, cmd.IdempotencyKey, fingerprint, &res)
 		if err != nil {
 			return err
 		}
@@ -99,23 +99,23 @@ func (l *Ledger) OpenAccount(ctx context.Context, cmd OpenAccountCommand) (domai
 			// The retry gets the account the first call opened, not a fresh
 			// one, so a caller cannot tell a replay from the original except
 			// by Result.Replayed.
-			existing, _, err := w.Account(cmd.Name)
+			existing, _, err := writer.Account(cmd.Name)
 			acct = existing
 			return err
 		}
 
-		if _, exists, err := w.Account(cmd.Name); err != nil {
+		if _, exists, err := writer.Account(cmd.Name); err != nil {
 			return err
 		} else if exists {
 			return fmt.Errorf("%w: %q", domain.ErrAccountExists, cmd.Name)
 		}
 
-		now := l.clock()
+		now := ledger.clock()
 		openedAt := cmd.EffectiveAt
 		if openedAt.IsZero() {
 			openedAt = now
 		}
-		if err := l.checkEffective(openedAt, now); err != nil {
+		if err := ledger.checkEffective(openedAt, now); err != nil {
 			return err
 		}
 
@@ -131,16 +131,16 @@ func (l *Ledger) OpenAccount(ctx context.Context, cmd OpenAccountCommand) (domai
 		if err != nil {
 			return err
 		}
-		e, err := domain.NewEvent(l.id, payload, now, cmd.IdempotencyKey)
+		event, err := domain.NewEvent(ledger.id, payload, now, cmd.IdempotencyKey)
 		if err != nil {
 			return err
 		}
-		if err := w.Stage(&e); err != nil {
+		if err := writer.Stage(&event); err != nil {
 			return err
 		}
-		acct.OpenedSeq = e.Seq
-		res = Result{Seq: e.Seq, EventID: e.ID, RecordedAt: e.RecordedAt}
-		return l.stageIdempotency(w, cmd.IdempotencyKey, fp, e, domain.ID{})
+		acct.OpenedSeq = event.Seq
+		res = Result{Seq: event.Seq, EventID: event.ID, RecordedAt: event.RecordedAt}
+		return ledger.stageIdempotency(writer, cmd.IdempotencyKey, fingerprint, event, domain.ID{})
 	})
 	if err != nil {
 		return domain.Account{}, Result{}, err
@@ -150,21 +150,21 @@ func (l *Ledger) OpenAccount(ctx context.Context, cmd OpenAccountCommand) (domai
 
 // Commit records a transaction. It fails as a whole if any leg is invalid, any
 // account is missing, or any account would be overdrawn.
-func (l *Ledger) Commit(ctx context.Context, cmd CommitCommand) (Result, error) {
-	fp, err := domain.FingerprintCommit(cmd.ID, cmd.EffectiveAt, cmd.Postings,
+func (ledger *Ledger) Commit(ctx context.Context, cmd CommitCommand) (Result, error) {
+	fingerprint, err := domain.FingerprintCommit(cmd.ID, cmd.EffectiveAt, cmd.Postings,
 		cmd.Reference, cmd.Metadata)
 	if err != nil {
 		return Result{}, err
 	}
 
 	var res Result
-	err = l.store.Update(ctx, l.id, func(ctx context.Context, w Writer) error {
-		replayed, err := l.replayIdempotent(w, cmd.IdempotencyKey, fp, &res)
+	err = ledger.store.Update(ctx, ledger.id, func(ctx context.Context, writer Writer) error {
+		replayed, err := ledger.replayIdempotent(writer, cmd.IdempotencyKey, fingerprint, &res)
 		if err != nil || replayed {
 			return err
 		}
 
-		now := l.clock()
+		now := ledger.clock()
 		tx := domain.Transaction{
 			ID:          cmd.ID,
 			EffectiveAt: cmd.EffectiveAt,
@@ -182,15 +182,15 @@ func (l *Ledger) Commit(ctx context.Context, cmd CommitCommand) (Result, error) 
 		if err := tx.Validate(); err != nil {
 			return err
 		}
-		if _, exists, err := w.Transaction(tx.ID); err != nil {
+		if _, exists, err := writer.Transaction(tx.ID); err != nil {
 			return err
 		} else if exists {
 			return fmt.Errorf("%w: %s", domain.ErrTransactionExists, tx.ID)
 		}
-		if err := l.checkEffective(tx.EffectiveAt, now); err != nil {
+		if err := ledger.checkEffective(tx.EffectiveAt, now); err != nil {
 			return err
 		}
-		if err := l.admit(w, tx); err != nil {
+		if err := ledger.admit(writer, tx); err != nil {
 			return err
 		}
 
@@ -198,34 +198,34 @@ func (l *Ledger) Commit(ctx context.Context, cmd CommitCommand) (Result, error) 
 		if err != nil {
 			return err
 		}
-		e, err := domain.NewEvent(l.id, payload, now, cmd.IdempotencyKey)
+		event, err := domain.NewEvent(ledger.id, payload, now, cmd.IdempotencyKey)
 		if err != nil {
 			return err
 		}
-		if err := w.Stage(&e); err != nil {
+		if err := writer.Stage(&event); err != nil {
 			return err
 		}
-		res = Result{Seq: e.Seq, EventID: e.ID, TransactionID: tx.ID, RecordedAt: e.RecordedAt}
-		return l.stageIdempotency(w, cmd.IdempotencyKey, fp, e, tx.ID)
+		res = Result{Seq: event.Seq, EventID: event.ID, TransactionID: tx.ID, RecordedAt: event.RecordedAt}
+		return ledger.stageIdempotency(writer, cmd.IdempotencyKey, fingerprint, event, tx.ID)
 	})
 	return res, err
 }
 
 // Revert records the compensating transaction that undoes an earlier one.
-func (l *Ledger) Revert(ctx context.Context, cmd RevertCommand) (Result, error) {
-	fp, err := domain.FingerprintRevert(cmd.TransactionID, cmd.EffectiveAt, cmd.Reason)
+func (ledger *Ledger) Revert(ctx context.Context, cmd RevertCommand) (Result, error) {
+	fingerprint, err := domain.FingerprintRevert(cmd.TransactionID, cmd.EffectiveAt, cmd.Reason)
 	if err != nil {
 		return Result{}, err
 	}
 
 	var res Result
-	err = l.store.Update(ctx, l.id, func(ctx context.Context, w Writer) error {
-		replayed, err := l.replayIdempotent(w, cmd.IdempotencyKey, fp, &res)
+	err = ledger.store.Update(ctx, ledger.id, func(ctx context.Context, writer Writer) error {
+		replayed, err := ledger.replayIdempotent(writer, cmd.IdempotencyKey, fingerprint, &res)
 		if err != nil || replayed {
 			return err
 		}
 
-		original, exists, err := w.Transaction(cmd.TransactionID)
+		original, exists, err := writer.Transaction(cmd.TransactionID)
 		if err != nil {
 			return err
 		}
@@ -237,13 +237,13 @@ func (l *Ledger) Revert(ctx context.Context, cmd RevertCommand) (Result, error) 
 				domain.ErrAlreadyReverted, cmd.TransactionID, original.RevertedBy)
 		}
 
-		now := l.clock()
+		now := ledger.clock()
 		effectiveAt := cmd.EffectiveAt
 		if effectiveAt.IsZero() {
 			effectiveAt = now
 		}
 		effectiveAt = domain.NormalizeTime(effectiveAt)
-		if err := l.checkEffective(effectiveAt, now); err != nil {
+		if err := ledger.checkEffective(effectiveAt, now); err != nil {
 			return err
 		}
 
@@ -255,19 +255,19 @@ func (l *Ledger) Revert(ctx context.Context, cmd RevertCommand) (Result, error) 
 		if err != nil {
 			return err
 		}
-		if err := l.admit(w, reversal); err != nil {
+		if err := ledger.admit(writer, reversal); err != nil {
 			return err
 		}
 
-		e, err := domain.NewEvent(l.id, payload, now, cmd.IdempotencyKey)
+		event, err := domain.NewEvent(ledger.id, payload, now, cmd.IdempotencyKey)
 		if err != nil {
 			return err
 		}
-		if err := w.Stage(&e); err != nil {
+		if err := writer.Stage(&event); err != nil {
 			return err
 		}
-		res = Result{Seq: e.Seq, EventID: e.ID, TransactionID: payload.ID, RecordedAt: e.RecordedAt}
-		return l.stageIdempotency(w, cmd.IdempotencyKey, fp, e, payload.ID)
+		res = Result{Seq: event.Seq, EventID: event.ID, TransactionID: payload.ID, RecordedAt: event.RecordedAt}
+		return ledger.stageIdempotency(writer, cmd.IdempotencyKey, fingerprint, event, payload.ID)
 	})
 	return res, err
 }
@@ -282,46 +282,46 @@ func (l *Ledger) Revert(ctx context.Context, cmd RevertCommand) (Result, error) 
 // entry can make a past balance negative while the present one is healthy, and
 // refusing such an entry would make the ledger unable to record what actually
 // happened.
-func (l *Ledger) admit(w Writer, tx domain.Transaction) error {
+func (ledger *Ledger) admit(writer Writer, tx domain.Transaction) error {
 	deltas := make(map[domain.AccountName]domain.Amount, len(tx.Postings))
-	for _, p := range tx.Postings {
-		acct, exists, err := w.Account(p.Account)
+	for _, posting := range tx.Postings {
+		acct, exists, err := writer.Account(posting.Account)
 		if err != nil {
 			return err
 		}
 		if !exists {
-			return fmt.Errorf("%w: %q", domain.ErrAccountNotFound, p.Account)
+			return fmt.Errorf("%w: %q", domain.ErrAccountNotFound, posting.Account)
 		}
-		if acct.Currency != p.Amount.Currency() {
+		if acct.Currency != posting.Amount.Currency() {
 			return fmt.Errorf("%w: account %q is in %s, posting is in %s",
-				domain.ErrCurrencyMismatch, p.Account, acct.Currency, p.Amount.Currency())
+				domain.ErrCurrencyMismatch, posting.Account, acct.Currency, posting.Amount.Currency())
 		}
 		if tx.EffectiveAt.Before(acct.OpenedAt) {
 			return fmt.Errorf("%w: transaction is effective %s but %q opened %s",
 				domain.ErrEffectiveOutOfRange, tx.EffectiveAt.Format(time.RFC3339),
-				p.Account, acct.OpenedAt.Format(time.RFC3339))
+				posting.Account, acct.OpenedAt.Format(time.RFC3339))
 		}
 
-		running, ok := deltas[p.Account]
+		running, ok := deltas[posting.Account]
 		if !ok {
 			running = domain.Zero(acct.Currency)
 		}
-		next, err := running.Add(p.Amount)
+		next, err := running.Add(posting.Amount)
 		if err != nil {
 			return err
 		}
-		deltas[p.Account] = next
+		deltas[posting.Account] = next
 	}
 
 	for _, name := range tx.Accounts() {
-		acct, _, err := w.Account(name)
+		acct, _, err := writer.Account(name)
 		if err != nil {
 			return err
 		}
 		if acct.AllowNegative {
 			continue
 		}
-		current, err := w.Balance(name)
+		current, err := writer.Balance(name)
 		if err != nil {
 			return err
 		}
@@ -346,15 +346,15 @@ func (l *Ledger) admit(w Writer, tx domain.Transaction) error {
 // key seen with a different request is a conflict rather than a replay: two
 // different payments must never collapse into one because a caller reused a
 // key.
-func (l *Ledger) replayIdempotent(w Writer, key string, fp [32]byte, res *Result) (bool, error) {
+func (ledger *Ledger) replayIdempotent(writer Writer, key string, fingerprint [32]byte, res *Result) (bool, error) {
 	if key == "" {
 		return false, nil
 	}
-	rec, found, err := w.Idempotency(key)
+	rec, found, err := writer.Idempotency(key)
 	if err != nil || !found {
 		return false, err
 	}
-	if rec.RequestHash != fp {
+	if rec.RequestHash != fingerprint {
 		return false, fmt.Errorf("%w: %q", domain.ErrIdempotencyConflict, key)
 	}
 	*res = Result{
@@ -366,47 +366,47 @@ func (l *Ledger) replayIdempotent(w Writer, key string, fp [32]byte, res *Result
 	return true, nil
 }
 
-func (l *Ledger) stageIdempotency(w Writer, key string, fp [32]byte, e domain.Event, txID domain.ID) error {
+func (ledger *Ledger) stageIdempotency(writer Writer, key string, fingerprint [32]byte, event domain.Event, txID domain.ID) error {
 	if key == "" {
 		return nil
 	}
-	return w.StageIdempotency(domain.IdempotencyRecord{
+	return writer.StageIdempotency(domain.IdempotencyRecord{
 		Key:         key,
-		RequestHash: fp,
-		Seq:         e.Seq,
+		RequestHash: fingerprint,
+		Seq:         event.Seq,
 		TxID:        txID,
-		RecordedAt:  e.RecordedAt,
+		RecordedAt:  event.RecordedAt,
 	})
 }
 
-func (l *Ledger) checkEffective(effectiveAt, now time.Time) error {
-	if effectiveAt.Before(now.Add(-l.backdateLimit)) {
+func (ledger *Ledger) checkEffective(effectiveAt, now time.Time) error {
+	if effectiveAt.Before(now.Add(-ledger.backdateLimit)) {
 		return fmt.Errorf("%w: %s is more than %s in the past",
-			domain.ErrEffectiveOutOfRange, effectiveAt.Format(time.RFC3339), l.backdateLimit)
+			domain.ErrEffectiveOutOfRange, effectiveAt.Format(time.RFC3339), ledger.backdateLimit)
 	}
-	if effectiveAt.After(now.Add(l.futureLimit)) {
+	if effectiveAt.After(now.Add(ledger.futureLimit)) {
 		return fmt.Errorf("%w: %s is more than %s in the future",
-			domain.ErrEffectiveOutOfRange, effectiveAt.Format(time.RFC3339), l.futureLimit)
+			domain.ErrEffectiveOutOfRange, effectiveAt.Format(time.RFC3339), ledger.futureLimit)
 	}
 	return nil
 }
 
-func (l *Ledger) clock() time.Time { return domain.NormalizeTime(l.now()) }
+func (ledger *Ledger) clock() time.Time { return domain.NormalizeTime(ledger.now()) }
 
 // Balance returns an account's signed, debit-positive balance under the given
 // query. Both time axes are available: see [domain.BalanceQuery].
-func (l *Ledger) Balance(ctx context.Context, q domain.BalanceQuery) (domain.Amount, error) {
-	return l.store.Balance(ctx, l.id, q)
+func (ledger *Ledger) Balance(ctx context.Context, query domain.BalanceQuery) (domain.Amount, error) {
+	return ledger.store.Balance(ctx, ledger.id, query)
 }
 
 // PresentedBalance returns a balance the way the account reads it: positive
 // when the account holds what it is meant to hold, whichever side it is on.
-func (l *Ledger) PresentedBalance(ctx context.Context, q domain.BalanceQuery) (domain.Amount, error) {
-	acct, err := l.store.Account(ctx, l.id, q.Account)
+func (ledger *Ledger) PresentedBalance(ctx context.Context, query domain.BalanceQuery) (domain.Amount, error) {
+	acct, err := ledger.store.Account(ctx, ledger.id, query.Account)
 	if err != nil {
 		return domain.Amount{}, err
 	}
-	balance, err := l.store.Balance(ctx, l.id, q)
+	balance, err := ledger.store.Balance(ctx, ledger.id, query)
 	if err != nil {
 		return domain.Amount{}, err
 	}
@@ -414,33 +414,33 @@ func (l *Ledger) PresentedBalance(ctx context.Context, q domain.BalanceQuery) (d
 }
 
 // Entries lists entries in recorded order.
-func (l *Ledger) Entries(ctx context.Context, q domain.EntryQuery) ([]domain.Entry, error) {
-	return l.store.Entries(ctx, l.id, q)
+func (ledger *Ledger) Entries(ctx context.Context, query domain.EntryQuery) ([]domain.Entry, error) {
+	return ledger.store.Entries(ctx, ledger.id, query)
 }
 
 // Account returns one account.
-func (l *Ledger) Account(ctx context.Context, name domain.AccountName) (domain.Account, error) {
-	return l.store.Account(ctx, l.id, name)
+func (ledger *Ledger) Account(ctx context.Context, name domain.AccountName) (domain.Account, error) {
+	return ledger.store.Account(ctx, ledger.id, name)
 }
 
 // Accounts lists accounts under a prefix.
-func (l *Ledger) Accounts(ctx context.Context, prefix domain.AccountName) ([]domain.Account, error) {
-	return l.store.Accounts(ctx, l.id, prefix)
+func (ledger *Ledger) Accounts(ctx context.Context, prefix domain.AccountName) ([]domain.Account, error) {
+	return ledger.store.Accounts(ctx, ledger.id, prefix)
 }
 
 // Transaction returns one transaction with its reversal linkage.
-func (l *Ledger) Transaction(ctx context.Context, id domain.ID) (domain.RecordedTransaction, error) {
-	return l.store.Transaction(ctx, l.id, id)
+func (ledger *Ledger) Transaction(ctx context.Context, id domain.ID) (domain.RecordedTransaction, error) {
+	return ledger.store.Transaction(ctx, ledger.id, id)
 }
 
 // Head returns the end of the event stream.
-func (l *Ledger) Head(ctx context.Context) (domain.Head, error) {
-	return l.store.Head(ctx, l.id)
+func (ledger *Ledger) Head(ctx context.Context) (domain.Head, error) {
+	return ledger.store.Head(ctx, ledger.id)
 }
 
 // Events reads the raw event log.
-func (l *Ledger) Events(ctx context.Context, fromSeq int64, limit int) ([]domain.Event, error) {
-	return l.store.Events(ctx, l.id, fromSeq, limit)
+func (ledger *Ledger) Events(ctx context.Context, fromSeq int64, limit int) ([]domain.Event, error) {
+	return ledger.store.Events(ctx, ledger.id, fromSeq, limit)
 }
 
 // VerifyChainPageSize is how many events [Ledger.Verify] reads at a time.
@@ -449,14 +449,14 @@ const VerifyChainPageSize = 1000
 // Verify walks the whole event log and checks that it is an unbroken,
 // untampered chain. It is the ledger answering "has anything been changed
 // behind my back" without trusting the database it is stored in.
-func (l *Ledger) Verify(ctx context.Context) (domain.Head, error) {
+func (ledger *Ledger) Verify(ctx context.Context) (domain.Head, error) {
 	var (
 		prev     = domain.GenesisHash
 		seq      = int64(1)
 		verified domain.Head
 	)
 	for {
-		events, err := l.store.Events(ctx, l.id, seq, VerifyChainPageSize)
+		events, err := ledger.store.Events(ctx, ledger.id, seq, VerifyChainPageSize)
 		if err != nil {
 			return verified, err
 		}

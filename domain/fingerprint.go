@@ -88,25 +88,25 @@ func FingerprintRevert(txID ID, effectiveAt time.Time, reason string) ([32]byte,
 	})
 }
 
-func fingerprint(v any) ([32]byte, error) {
-	b, err := canonicalJSON(v)
+func fingerprint(value any) ([32]byte, error) {
+	encoded, err := canonicalJSON(value)
 	if err != nil {
 		return [32]byte{}, err
 	}
-	h := sha256.New()
-	writeChunk(h, []byte(requestHashDomain))
-	writeChunk(h, b)
-	return [32]byte(h.Sum(nil)), nil
+	hasher := sha256.New()
+	writeChunk(hasher, []byte(requestHashDomain))
+	writeChunk(hasher, encoded)
+	return [32]byte(hasher.Sum(nil)), nil
 }
 
 // formatOptionalTime renders the caller's timestamp, keeping "unset" distinct
 // from any particular instant. Resolving it to "now" before fingerprinting
 // would give every retry a different fingerprint and defeat idempotency.
-func formatOptionalTime(t time.Time) string {
-	if t.IsZero() {
+func formatOptionalTime(at time.Time) string {
+	if at.IsZero() {
 		return ""
 	}
-	return NormalizeTime(t).Format(time.RFC3339Nano)
+	return NormalizeTime(at).Format(time.RFC3339Nano)
 }
 
 func optionalID(id ID) string {

@@ -109,16 +109,16 @@ func TestFingerprintNormalizesTime(t *testing.T) {
 	brl := MustCurrency("BRL")
 	base := time.Date(2026, 3, 4, 5, 6, 7, 123456000, time.UTC)
 
-	a, err := FingerprintOpenAccount("assets:cash", brl, Debit, true, base, nil)
+	first, err := FingerprintOpenAccount("assets:cash", brl, Debit, true, base, nil)
 	if err != nil {
 		t.Fatalf("FingerprintOpenAccount: %v", err)
 	}
-	b, err := FingerprintOpenAccount("assets:cash", brl, Debit, true,
+	second, err := FingerprintOpenAccount("assets:cash", brl, Debit, true,
 		base.Add(999*time.Nanosecond).In(time.FixedZone("BRT", -3*3600)), nil)
 	if err != nil {
 		t.Fatalf("FingerprintOpenAccount: %v", err)
 	}
-	if a != b {
+	if first != second {
 		t.Error("two timestamps the ledger stores identically fingerprinted differently")
 	}
 }

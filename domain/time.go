@@ -13,6 +13,6 @@ const TimePrecision = time.Microsecond
 
 // NormalizeTime puts a timestamp in the single representation the ledger uses:
 // UTC, truncated to [TimePrecision].
-func NormalizeTime(t time.Time) time.Time {
-	return t.UTC().Truncate(TimePrecision)
+func NormalizeTime(at time.Time) time.Time {
+	return at.UTC().Truncate(TimePrecision)
 }
