@@ -20,8 +20,6 @@ else in the design follows from making it true.
 > idempotency, bitemporal balances, a hash-chained event log, and stores for
 > memory and PostgreSQL. Forward-dated settlement, payment holds, and
 > reconciliation are the next phases.
->
-> Full inventory, including known limits: [docs/IMPLEMENTED.md](docs/IMPLEMENTED.md).
 
 ## Why
 
@@ -170,7 +168,7 @@ make prop               # property tests, 10,000 cases
 make fuzz               # every fuzz target
 ```
 
-Statement coverage is 82%. The uncovered remainder is mostly `cmd/ledgerd`
+Statement coverage is > 80%. The uncovered remainder is mostly `cmd/ledgerd`
 wiring and error branches that need a database failure to reach.
 
 ## Roadmap
@@ -188,5 +186,4 @@ deliberately *not* planned — is in [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## License
 
-[Apache License 2.0](LICENSE). Permissive, with an explicit patent grant — which
-is not a detail in payments.
+[Apache License 2.0](LICENSE). Permissive, with an explicit patent grant.
