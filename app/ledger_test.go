@@ -27,27 +27,27 @@ var (
 // mutex-guarded because the concurrency tests read it from several goroutines.
 type clock struct {
 	mu sync.Mutex
-	t  time.Time
+	at time.Time
 }
 
-func (c *clock) Now() time.Time {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.t
+func (clk *clock) Now() time.Time {
+	clk.mu.Lock()
+	defer clk.mu.Unlock()
+	return clk.at
 }
 
-func (c *clock) Advance(d time.Duration) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.t = c.t.Add(d)
+func (clk *clock) Advance(by time.Duration) {
+	clk.mu.Lock()
+	defer clk.mu.Unlock()
+	clk.at = clk.at.Add(by)
 }
 
 type fixture struct {
-	t     *testing.T
-	l     *app.Ledger
-	store app.Store
-	clock *clock
-	ctx   context.Context
+	t      *testing.T
+	ledger *app.Ledger
+	store  app.Store
+	clock  *clock
+	ctx    context.Context
 }
 
 func newFixture(t *testing.T, opts ...app.Option) *fixture {
@@ -55,74 +55,74 @@ func newFixture(t *testing.T, opts ...app.Option) *fixture {
 	store := memstore.New()
 	t.Cleanup(func() { _ = store.Close() })
 
-	c := &clock{t: base}
-	l, err := app.Open(store, "test", append([]app.Option{app.WithClock(c.Now)}, opts...)...)
+	clk := &clock{at: base}
+	ledger, err := app.Open(store, "test", append([]app.Option{app.WithClock(clk.Now)}, opts...)...)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	return &fixture{t: t, l: l, store: store, clock: c, ctx: context.Background()}
+	return &fixture{t: t, ledger: ledger, store: store, clock: clk, ctx: context.Background()}
 }
 
-func (f *fixture) open(name domain.AccountName, normal domain.Normal, allowNegative bool) domain.Account {
-	f.t.Helper()
-	acct, _, err := f.l.OpenAccount(f.ctx, app.OpenAccountCommand{
+func (fix *fixture) open(name domain.AccountName, normal domain.Normal, allowNegative bool) domain.Account {
+	fix.t.Helper()
+	acct, _, err := fix.ledger.OpenAccount(fix.ctx, app.OpenAccountCommand{
 		Name: name, Currency: brl, Normal: normal, AllowNegative: allowNegative,
 	})
 	if err != nil {
-		f.t.Fatalf("OpenAccount(%q): %v", name, err)
+		fix.t.Fatalf("OpenAccount(%q): %v", name, err)
 	}
 	return acct
 }
 
 // funded opens a credit-normal account and puts money in it, the other leg
 // coming from the external account that represents the rest of the world.
-func (f *fixture) funded(name domain.AccountName, minor int64) {
-	f.t.Helper()
-	if _, err := f.l.Account(f.ctx, "assets:cash"); err != nil {
-		f.open("assets:cash", domain.Debit, true)
+func (fix *fixture) funded(name domain.AccountName, minor int64) {
+	fix.t.Helper()
+	if _, err := fix.ledger.Account(fix.ctx, "assets:cash"); err != nil {
+		fix.open("assets:cash", domain.Debit, true)
 	}
-	f.open(name, domain.Credit, false)
-	f.commit(app.CommitCommand{Postings: []domain.Posting{
+	fix.open(name, domain.Credit, false)
+	fix.commit(app.CommitCommand{Postings: []domain.Posting{
 		domain.Dr("assets:cash", domain.FromMinor(brl, minor)),
 		domain.Cr(name, domain.FromMinor(brl, minor)),
 	}})
 }
 
-func (f *fixture) commit(cmd app.CommitCommand) app.Result {
-	f.t.Helper()
-	res, err := f.l.Commit(f.ctx, cmd)
+func (fix *fixture) commit(cmd app.CommitCommand) app.Result {
+	fix.t.Helper()
+	res, err := fix.ledger.Commit(fix.ctx, cmd)
 	if err != nil {
-		f.t.Fatalf("Commit: %v", err)
+		fix.t.Fatalf("Commit: %v", err)
 	}
 	return res
 }
 
 // transfer moves minor units out of a credit-normal account into another.
-func (f *fixture) transfer(from, to domain.AccountName, minor int64) app.Result {
-	f.t.Helper()
-	return f.commit(app.CommitCommand{Postings: []domain.Posting{
+func (fix *fixture) transfer(from, to domain.AccountName, minor int64) app.Result {
+	fix.t.Helper()
+	return fix.commit(app.CommitCommand{Postings: []domain.Posting{
 		domain.Dr(from, domain.FromMinor(brl, minor)),
 		domain.Cr(to, domain.FromMinor(brl, minor)),
 	}})
 }
 
 // presented reads a balance the way the account's holder reads it.
-func (f *fixture) presented(name domain.AccountName) int64 {
-	f.t.Helper()
-	amt, err := f.l.PresentedBalance(f.ctx, domain.BalanceQuery{Account: name})
+func (fix *fixture) presented(name domain.AccountName) int64 {
+	fix.t.Helper()
+	amt, err := fix.ledger.PresentedBalance(fix.ctx, domain.BalanceQuery{Account: name})
 	if err != nil {
-		f.t.Fatalf("PresentedBalance(%q): %v", name, err)
+		fix.t.Fatalf("PresentedBalance(%q): %v", name, err)
 	}
 	return amt.Minor()
 }
 
-func (f *fixture) head() domain.Head {
-	f.t.Helper()
-	h, err := f.l.Head(f.ctx)
+func (fix *fixture) head() domain.Head {
+	fix.t.Helper()
+	head, err := fix.ledger.Head(fix.ctx)
 	if err != nil {
-		f.t.Fatalf("Head: %v", err)
+		fix.t.Fatalf("Head: %v", err)
 	}
-	return h
+	return head
 }
 
 func TestOpenRejectsBadArguments(t *testing.T) {
@@ -134,19 +134,19 @@ func TestOpenRejectsBadArguments(t *testing.T) {
 			t.Errorf("Open(%q) = %v, want ErrInvalidID", id, err)
 		}
 	}
-	l, err := app.Open(memstore.New(), "main")
+	ledger, err := app.Open(memstore.New(), "main")
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	if l.ID() != "main" {
-		t.Errorf("ID() = %q, want %q", l.ID(), "main")
+	if ledger.ID() != "main" {
+		t.Errorf("ID() = %q, want %q", ledger.ID(), "main")
 	}
 }
 
 func TestOpenAccount(t *testing.T) {
-	f := newFixture(t)
+	fix := newFixture(t)
 
-	acct, res, err := f.l.OpenAccount(f.ctx, app.OpenAccountCommand{
+	acct, res, err := fix.ledger.OpenAccount(fix.ctx, app.OpenAccountCommand{
 		Name: "liabilities:users:1", Currency: brl, Normal: domain.Credit,
 		Metadata: map[string]string{"owner": "9f3c"},
 	})
@@ -167,7 +167,7 @@ func TestOpenAccount(t *testing.T) {
 	}
 
 	// The account is readable through the store, not just returned.
-	got, err := f.l.Account(f.ctx, "liabilities:users:1")
+	got, err := fix.ledger.Account(fix.ctx, "liabilities:users:1")
 	if err != nil {
 		t.Fatalf("Account: %v", err)
 	}
@@ -200,22 +200,22 @@ func TestOpenAccountRejects(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			f := newFixture(t)
-			if _, _, err := f.l.OpenAccount(f.ctx, tt.cmd); !errors.Is(err, tt.want) {
+			fix := newFixture(t)
+			if _, _, err := fix.ledger.OpenAccount(fix.ctx, tt.cmd); !errors.Is(err, tt.want) {
 				t.Errorf("OpenAccount = %v, want %v", err, tt.want)
 			}
-			if h := f.head(); h.Seq != 0 {
-				t.Errorf("stream is at %d, want 0: a rejected command wrote an event", h.Seq)
+			if head := fix.head(); head.Seq != 0 {
+				t.Errorf("stream is at %d, want 0: a rejected command wrote an event", head.Seq)
 			}
 		})
 	}
 }
 
 func TestOpenAccountTwiceIsAnError(t *testing.T) {
-	f := newFixture(t)
-	f.open("assets:cash", domain.Debit, true)
+	fix := newFixture(t)
+	fix.open("assets:cash", domain.Debit, true)
 
-	_, _, err := f.l.OpenAccount(f.ctx, app.OpenAccountCommand{
+	_, _, err := fix.ledger.OpenAccount(fix.ctx, app.OpenAccountCommand{
 		Name: "assets:cash", Currency: brl, Normal: domain.Debit,
 	})
 	if !errors.Is(err, domain.ErrAccountExists) {
@@ -227,9 +227,9 @@ func TestOpenAccountTwiceIsAnError(t *testing.T) {
 // accepts, for the same reason an entry may not: a balance dated before the
 // account existed is not a balance anyone can reproduce.
 func TestEffectiveWindow(t *testing.T) {
-	f := newFixture(t, app.WithBackdateLimit(time.Hour), app.WithFutureLimit(time.Minute))
+	fix := newFixture(t, app.WithBackdateLimit(time.Hour), app.WithFutureLimit(time.Minute))
 
-	_, _, err := f.l.OpenAccount(f.ctx, app.OpenAccountCommand{
+	_, _, err := fix.ledger.OpenAccount(fix.ctx, app.OpenAccountCommand{
 		Name: "assets:cash", Currency: brl, Normal: domain.Debit,
 		EffectiveAt: base.Add(-2 * time.Hour),
 	})
@@ -237,7 +237,7 @@ func TestEffectiveWindow(t *testing.T) {
 		t.Errorf("OpenAccount(too far back) = %v, want ErrEffectiveOutOfRange", err)
 	}
 
-	_, _, err = f.l.OpenAccount(f.ctx, app.OpenAccountCommand{
+	_, _, err = fix.ledger.OpenAccount(fix.ctx, app.OpenAccountCommand{
 		Name: "assets:cash", Currency: brl, Normal: domain.Debit,
 		EffectiveAt: base.Add(2 * time.Minute),
 	})
@@ -246,7 +246,7 @@ func TestEffectiveWindow(t *testing.T) {
 	}
 
 	// Inside the window it is a normal operation, not a grudging exception.
-	if _, _, err := f.l.OpenAccount(f.ctx, app.OpenAccountCommand{
+	if _, _, err := fix.ledger.OpenAccount(fix.ctx, app.OpenAccountCommand{
 		Name: "assets:cash", Currency: brl, Normal: domain.Debit,
 		EffectiveAt: base.Add(-30 * time.Minute),
 	}); err != nil {
@@ -255,11 +255,11 @@ func TestEffectiveWindow(t *testing.T) {
 }
 
 func TestCommitRecordsBothLegs(t *testing.T) {
-	f := newFixture(t)
-	f.funded("liabilities:users:1", 10000)
-	f.open("revenue:fees", domain.Credit, false)
+	fix := newFixture(t)
+	fix.funded("liabilities:users:1", 10000)
+	fix.open("revenue:fees", domain.Credit, false)
 
-	res := f.transfer("liabilities:users:1", "revenue:fees", 250)
+	res := fix.transfer("liabilities:users:1", "revenue:fees", 250)
 	if res.TransactionID.IsZero() {
 		t.Error("Commit returned no transaction id")
 	}
@@ -267,17 +267,17 @@ func TestCommitRecordsBothLegs(t *testing.T) {
 		t.Error("a first commit reported itself as a replay")
 	}
 
-	if got := f.presented("liabilities:users:1"); got != 9750 {
+	if got := fix.presented("liabilities:users:1"); got != 9750 {
 		t.Errorf("user balance = %d, want 9750", got)
 	}
-	if got := f.presented("revenue:fees"); got != 250 {
+	if got := fix.presented("revenue:fees"); got != 250 {
 		t.Errorf("fees balance = %d, want 250", got)
 	}
-	if got := f.presented("assets:cash"); got != 10000 {
+	if got := fix.presented("assets:cash"); got != 10000 {
 		t.Errorf("cash balance = %d, want 10000: a transfer between two credit accounts moved cash", got)
 	}
 
-	tx, err := f.l.Transaction(f.ctx, res.TransactionID)
+	tx, err := fix.ledger.Transaction(fix.ctx, res.TransactionID)
 	if err != nil {
 		t.Fatalf("Transaction: %v", err)
 	}
@@ -333,20 +333,20 @@ func TestCommitRejects(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			f := newFixture(t)
-			f.funded("liabilities:users:1", 10000)
-			f.open("revenue:fees", domain.Credit, false)
-			before := f.head()
+			fix := newFixture(t)
+			fix.funded("liabilities:users:1", 10000)
+			fix.open("revenue:fees", domain.Credit, false)
+			before := fix.head()
 
-			_, err := f.l.Commit(f.ctx, app.CommitCommand{Postings: tt.postings})
+			_, err := fix.ledger.Commit(fix.ctx, app.CommitCommand{Postings: tt.postings})
 			if !errors.Is(err, tt.want) {
 				t.Fatalf("Commit = %v, want %v", err, tt.want)
 			}
-			if after := f.head(); after.Seq != before.Seq {
+			if after := fix.head(); after.Seq != before.Seq {
 				t.Errorf("stream moved from %d to %d: a rejected command wrote an event",
 					before.Seq, after.Seq)
 			}
-			if got := f.presented("liabilities:users:1"); got != 10000 {
+			if got := fix.presented("liabilities:users:1"); got != 10000 {
 				t.Errorf("balance = %d, want 10000: a rejected command moved money", got)
 			}
 		})
@@ -357,24 +357,24 @@ func TestCommitRejects(t *testing.T) {
 // modelled: a clearing account holds no funds of its own and goes negative
 // while money is in flight. The account being funded from it may not.
 func TestCommitAllowsNegativeWhenPermitted(t *testing.T) {
-	f := newFixture(t)
-	f.open("liabilities:clearing", domain.Credit, true)
-	f.open("liabilities:users:1", domain.Credit, false)
+	fix := newFixture(t)
+	fix.open("liabilities:clearing", domain.Credit, true)
+	fix.open("liabilities:users:1", domain.Credit, false)
 
-	f.commit(app.CommitCommand{Postings: []domain.Posting{
+	fix.commit(app.CommitCommand{Postings: []domain.Posting{
 		domain.Dr("liabilities:clearing", domain.FromMinor(brl, 500)),
 		domain.Cr("liabilities:users:1", domain.FromMinor(brl, 500)),
 	}})
-	if got := f.presented("liabilities:clearing"); got != -500 {
+	if got := fix.presented("liabilities:clearing"); got != -500 {
 		t.Errorf("clearing balance = %d, want -500", got)
 	}
-	if got := f.presented("liabilities:users:1"); got != 500 {
+	if got := fix.presented("liabilities:users:1"); got != 500 {
 		t.Errorf("user balance = %d, want 500", got)
 	}
 
 	// The same movement in the other direction is refused, because that
 	// account was opened without permission to go past zero.
-	_, err := f.l.Commit(f.ctx, app.CommitCommand{Postings: []domain.Posting{
+	_, err := fix.ledger.Commit(fix.ctx, app.CommitCommand{Postings: []domain.Posting{
 		domain.Dr("liabilities:users:1", domain.FromMinor(brl, 501)),
 		domain.Cr("liabilities:clearing", domain.FromMinor(brl, 501)),
 	}})
@@ -387,24 +387,24 @@ func TestCommitAllowsNegativeWhenPermitted(t *testing.T) {
 // account, not against each leg in turn, or a transaction that takes and
 // returns within itself would be refused.
 func TestCommitNetsPostingsPerAccount(t *testing.T) {
-	f := newFixture(t)
-	f.funded("liabilities:users:1", 100)
-	f.open("revenue:fees", domain.Credit, false)
+	fix := newFixture(t)
+	fix.funded("liabilities:users:1", 100)
+	fix.open("revenue:fees", domain.Credit, false)
 
-	f.commit(app.CommitCommand{Postings: []domain.Posting{
+	fix.commit(app.CommitCommand{Postings: []domain.Posting{
 		domain.Dr("liabilities:users:1", domain.FromMinor(brl, 1000)),
 		domain.Cr("liabilities:users:1", domain.FromMinor(brl, 950)),
 		domain.Cr("revenue:fees", domain.FromMinor(brl, 50)),
 	}})
-	if got := f.presented("liabilities:users:1"); got != 50 {
+	if got := fix.presented("liabilities:users:1"); got != 50 {
 		t.Errorf("balance = %d, want 50", got)
 	}
 }
 
 func TestCommitRejectsDuplicateTransactionID(t *testing.T) {
-	f := newFixture(t)
-	f.funded("liabilities:users:1", 10000)
-	f.open("revenue:fees", domain.Credit, false)
+	fix := newFixture(t)
+	fix.funded("liabilities:users:1", 10000)
+	fix.open("revenue:fees", domain.Credit, false)
 
 	id := domain.NewID()
 	cmd := app.CommitCommand{
@@ -414,19 +414,19 @@ func TestCommitRejectsDuplicateTransactionID(t *testing.T) {
 			domain.Cr("revenue:fees", domain.FromMinor(brl, 100)),
 		},
 	}
-	f.commit(cmd)
+	fix.commit(cmd)
 
 	// No idempotency key, so this is not a retry -- it is a second transaction
 	// claiming an identity that is taken.
-	if _, err := f.l.Commit(f.ctx, cmd); !errors.Is(err, domain.ErrTransactionExists) {
+	if _, err := fix.ledger.Commit(fix.ctx, cmd); !errors.Is(err, domain.ErrTransactionExists) {
 		t.Errorf("Commit(duplicate id) = %v, want ErrTransactionExists", err)
 	}
 }
 
 func TestIdempotentRetryDoesNotWriteTwice(t *testing.T) {
-	f := newFixture(t)
-	f.funded("liabilities:users:1", 10000)
-	f.open("revenue:fees", domain.Credit, false)
+	fix := newFixture(t)
+	fix.funded("liabilities:users:1", 10000)
+	fix.open("revenue:fees", domain.Credit, false)
 
 	cmd := app.CommitCommand{
 		IdempotencyKey: "pay-1",
@@ -435,23 +435,23 @@ func TestIdempotentRetryDoesNotWriteTwice(t *testing.T) {
 			domain.Cr("revenue:fees", domain.FromMinor(brl, 100)),
 		},
 	}
-	first := f.commit(cmd)
+	first := fix.commit(cmd)
 	if first.Replayed {
 		t.Error("the first call reported itself as a replay")
 	}
 
-	f.clock.Advance(time.Minute)
-	second := f.commit(cmd)
+	fix.clock.Advance(time.Minute)
+	second := fix.commit(cmd)
 	if !second.Replayed {
 		t.Error("the retry was not reported as a replay")
 	}
 	if second.Seq != first.Seq || second.TransactionID != first.TransactionID {
 		t.Errorf("retry returned %+v, want the original %+v", second, first)
 	}
-	if h := f.head(); h.Seq != first.Seq {
-		t.Errorf("stream is at %d, want %d: the retry appended an event", h.Seq, first.Seq)
+	if head := fix.head(); head.Seq != first.Seq {
+		t.Errorf("stream is at %d, want %d: the retry appended an event", head.Seq, first.Seq)
 	}
-	if got := f.presented("liabilities:users:1"); got != 9900 {
+	if got := fix.presented("liabilities:users:1"); got != 9900 {
 		t.Errorf("balance = %d, want 9900: the retry moved money twice", got)
 	}
 }
@@ -460,9 +460,9 @@ func TestIdempotentRetryDoesNotWriteTwice(t *testing.T) {
 // in. Neither the transaction id nor the effective time is supplied here, so
 // both are generated -- and a retry a minute later still has to match.
 func TestIdempotencyIgnoresGeneratedValues(t *testing.T) {
-	f := newFixture(t)
-	f.funded("liabilities:users:1", 10000)
-	f.open("revenue:fees", domain.Credit, false)
+	fix := newFixture(t)
+	fix.funded("liabilities:users:1", 10000)
+	fix.open("revenue:fees", domain.Credit, false)
 
 	cmd := app.CommitCommand{
 		IdempotencyKey: "pay-xyz",
@@ -471,9 +471,9 @@ func TestIdempotencyIgnoresGeneratedValues(t *testing.T) {
 			domain.Cr("revenue:fees", domain.FromMinor(brl, 100)),
 		},
 	}
-	first := f.commit(cmd)
-	f.clock.Advance(time.Minute)
-	second := f.commit(cmd)
+	first := fix.commit(cmd)
+	fix.clock.Advance(time.Minute)
+	second := fix.commit(cmd)
 
 	if !second.Replayed || second.TransactionID != first.TransactionID {
 		t.Errorf("retry = %+v, want a replay of %+v", second, first)
@@ -481,11 +481,11 @@ func TestIdempotencyIgnoresGeneratedValues(t *testing.T) {
 }
 
 func TestIdempotencyKeyReusedWithAnotherCommand(t *testing.T) {
-	f := newFixture(t)
-	f.funded("liabilities:users:1", 10000)
-	f.open("revenue:fees", domain.Credit, false)
+	fix := newFixture(t)
+	fix.funded("liabilities:users:1", 10000)
+	fix.open("revenue:fees", domain.Credit, false)
 
-	f.commit(app.CommitCommand{
+	fix.commit(app.CommitCommand{
 		IdempotencyKey: "pay-1",
 		Postings: []domain.Posting{
 			domain.Dr("liabilities:users:1", domain.FromMinor(brl, 100)),
@@ -495,7 +495,7 @@ func TestIdempotencyKeyReusedWithAnotherCommand(t *testing.T) {
 
 	// Same key, a different amount: two different payments must never collapse
 	// into one because a caller reused a key.
-	_, err := f.l.Commit(f.ctx, app.CommitCommand{
+	_, err := fix.ledger.Commit(fix.ctx, app.CommitCommand{
 		IdempotencyKey: "pay-1",
 		Postings: []domain.Posting{
 			domain.Dr("liabilities:users:1", domain.FromMinor(brl, 200)),
@@ -508,17 +508,17 @@ func TestIdempotencyKeyReusedWithAnotherCommand(t *testing.T) {
 }
 
 func TestOpenAccountIsIdempotent(t *testing.T) {
-	f := newFixture(t)
+	fix := newFixture(t)
 	cmd := app.OpenAccountCommand{
 		Name: "assets:cash", Currency: brl, Normal: domain.Debit,
 		IdempotencyKey: "open-cash",
 	}
-	first, res, err := f.l.OpenAccount(f.ctx, cmd)
+	first, res, err := fix.ledger.OpenAccount(fix.ctx, cmd)
 	if err != nil {
 		t.Fatalf("OpenAccount: %v", err)
 	}
 
-	again, res2, err := f.l.OpenAccount(f.ctx, cmd)
+	again, res2, err := fix.ledger.OpenAccount(fix.ctx, cmd)
 	if err != nil {
 		t.Fatalf("OpenAccount(retry): %v", err)
 	}
@@ -532,14 +532,14 @@ func TestOpenAccountIsIdempotent(t *testing.T) {
 }
 
 func TestRevert(t *testing.T) {
-	f := newFixture(t)
-	f.funded("liabilities:users:1", 10000)
-	f.open("revenue:fees", domain.Credit, false)
+	fix := newFixture(t)
+	fix.funded("liabilities:users:1", 10000)
+	fix.open("revenue:fees", domain.Credit, false)
 
-	paid := f.transfer("liabilities:users:1", "revenue:fees", 300)
-	f.clock.Advance(time.Hour)
+	paid := fix.transfer("liabilities:users:1", "revenue:fees", 300)
+	fix.clock.Advance(time.Hour)
 
-	res, err := f.l.Revert(f.ctx, app.RevertCommand{
+	res, err := fix.ledger.Revert(fix.ctx, app.RevertCommand{
 		TransactionID: paid.TransactionID,
 		Reason:        "chargeback",
 	})
@@ -549,18 +549,18 @@ func TestRevert(t *testing.T) {
 	if res.TransactionID == paid.TransactionID {
 		t.Error("the reversal reused the original's id; it must be its own transaction")
 	}
-	if got := f.presented("liabilities:users:1"); got != 10000 {
+	if got := fix.presented("liabilities:users:1"); got != 10000 {
 		t.Errorf("balance = %d, want 10000: the reversal did not undo the payment", got)
 	}
 
-	original, err := f.l.Transaction(f.ctx, paid.TransactionID)
+	original, err := fix.ledger.Transaction(fix.ctx, paid.TransactionID)
 	if err != nil {
 		t.Fatalf("Transaction(original): %v", err)
 	}
 	if original.RevertedBy != res.TransactionID {
 		t.Errorf("RevertedBy = %s, want %s", original.RevertedBy, res.TransactionID)
 	}
-	reversal, err := f.l.Transaction(f.ctx, res.TransactionID)
+	reversal, err := fix.ledger.Transaction(fix.ctx, res.TransactionID)
 	if err != nil {
 		t.Fatalf("Transaction(reversal): %v", err)
 	}
@@ -572,18 +572,18 @@ func TestRevert(t *testing.T) {
 // A reversal dated now leaves the original's effect standing for the period
 // between the two, which is the honest record of a correction discovered late.
 func TestRevertLeavesHistoryStanding(t *testing.T) {
-	f := newFixture(t)
-	f.funded("liabilities:users:1", 10000)
-	f.open("revenue:fees", domain.Credit, false)
+	fix := newFixture(t)
+	fix.funded("liabilities:users:1", 10000)
+	fix.open("revenue:fees", domain.Credit, false)
 
-	paid := f.transfer("liabilities:users:1", "revenue:fees", 300)
-	f.clock.Advance(time.Hour)
-	if _, err := f.l.Revert(f.ctx, app.RevertCommand{TransactionID: paid.TransactionID}); err != nil {
+	paid := fix.transfer("liabilities:users:1", "revenue:fees", 300)
+	fix.clock.Advance(time.Hour)
+	if _, err := fix.ledger.Revert(fix.ctx, app.RevertCommand{TransactionID: paid.TransactionID}); err != nil {
 		t.Fatalf("Revert: %v", err)
 	}
 
 	// As of the moment before the reversal, the money was still gone.
-	amt, err := f.l.Balance(f.ctx, domain.BalanceQuery{
+	amt, err := fix.ledger.Balance(fix.ctx, domain.BalanceQuery{
 		Account: "liabilities:users:1", AsOfSeq: paid.Seq,
 	})
 	if err != nil {
@@ -596,38 +596,38 @@ func TestRevertLeavesHistoryStanding(t *testing.T) {
 }
 
 func TestRevertRejects(t *testing.T) {
-	f := newFixture(t)
-	f.funded("liabilities:users:1", 10000)
-	f.open("revenue:fees", domain.Credit, false)
+	fix := newFixture(t)
+	fix.funded("liabilities:users:1", 10000)
+	fix.open("revenue:fees", domain.Credit, false)
 
-	if _, err := f.l.Revert(f.ctx, app.RevertCommand{TransactionID: domain.NewID()}); !errors.Is(err, domain.ErrTransactionNotFound) {
+	if _, err := fix.ledger.Revert(fix.ctx, app.RevertCommand{TransactionID: domain.NewID()}); !errors.Is(err, domain.ErrTransactionNotFound) {
 		t.Errorf("Revert(unknown) = %v, want ErrTransactionNotFound", err)
 	}
 
-	paid := f.transfer("liabilities:users:1", "revenue:fees", 300)
-	if _, err := f.l.Revert(f.ctx, app.RevertCommand{TransactionID: paid.TransactionID}); err != nil {
+	paid := fix.transfer("liabilities:users:1", "revenue:fees", 300)
+	if _, err := fix.ledger.Revert(fix.ctx, app.RevertCommand{TransactionID: paid.TransactionID}); err != nil {
 		t.Fatalf("Revert: %v", err)
 	}
 	// A second correction has to be a new transaction, so the audit trail
 	// stays a chain rather than a set.
-	if _, err := f.l.Revert(f.ctx, app.RevertCommand{TransactionID: paid.TransactionID}); !errors.Is(err, domain.ErrAlreadyReverted) {
+	if _, err := fix.ledger.Revert(fix.ctx, app.RevertCommand{TransactionID: paid.TransactionID}); !errors.Is(err, domain.ErrAlreadyReverted) {
 		t.Errorf("Revert(twice) = %v, want ErrAlreadyReverted", err)
 	}
 }
 
 func TestRevertIsIdempotent(t *testing.T) {
-	f := newFixture(t)
-	f.funded("liabilities:users:1", 10000)
-	f.open("revenue:fees", domain.Credit, false)
-	paid := f.transfer("liabilities:users:1", "revenue:fees", 300)
+	fix := newFixture(t)
+	fix.funded("liabilities:users:1", 10000)
+	fix.open("revenue:fees", domain.Credit, false)
+	paid := fix.transfer("liabilities:users:1", "revenue:fees", 300)
 
 	cmd := app.RevertCommand{TransactionID: paid.TransactionID, IdempotencyKey: "undo-1"}
-	first, err := f.l.Revert(f.ctx, cmd)
+	first, err := fix.ledger.Revert(fix.ctx, cmd)
 	if err != nil {
 		t.Fatalf("Revert: %v", err)
 	}
-	f.clock.Advance(time.Minute)
-	second, err := f.l.Revert(f.ctx, cmd)
+	fix.clock.Advance(time.Minute)
+	second, err := fix.ledger.Revert(fix.ctx, cmd)
 	if err != nil {
 		t.Fatalf("Revert(retry): %v", err)
 	}
@@ -640,35 +640,35 @@ func TestRevertIsIdempotent(t *testing.T) {
 // is the only place presentation happens, and it is why balances can be held
 // signed everywhere else.
 func TestPresentedBalance(t *testing.T) {
-	f := newFixture(t)
-	f.funded("liabilities:users:1", 10000)
+	fix := newFixture(t)
+	fix.funded("liabilities:users:1", 10000)
 
-	signed, err := f.l.Balance(f.ctx, domain.BalanceQuery{Account: "liabilities:users:1"})
+	signed, err := fix.ledger.Balance(fix.ctx, domain.BalanceQuery{Account: "liabilities:users:1"})
 	if err != nil {
 		t.Fatalf("Balance: %v", err)
 	}
 	if signed.Minor() != -10000 {
 		t.Errorf("signed balance = %d, want -10000", signed.Minor())
 	}
-	if got := f.presented("liabilities:users:1"); got != 10000 {
+	if got := fix.presented("liabilities:users:1"); got != 10000 {
 		t.Errorf("presented balance = %d, want 10000", got)
 	}
-	if got := f.presented("assets:cash"); got != 10000 {
+	if got := fix.presented("assets:cash"); got != 10000 {
 		t.Errorf("presented balance of a debit account = %d, want 10000", got)
 	}
 
-	if _, err := f.l.PresentedBalance(f.ctx, domain.BalanceQuery{Account: "liabilities:ghost"}); !errors.Is(err, domain.ErrAccountNotFound) {
+	if _, err := fix.ledger.PresentedBalance(fix.ctx, domain.BalanceQuery{Account: "liabilities:ghost"}); !errors.Is(err, domain.ErrAccountNotFound) {
 		t.Errorf("PresentedBalance(unknown) = %v, want ErrAccountNotFound", err)
 	}
 }
 
 func TestQueries(t *testing.T) {
-	f := newFixture(t)
-	f.funded("liabilities:users:1", 10000)
-	f.open("liabilities:users:2", domain.Credit, false)
-	f.transfer("liabilities:users:1", "liabilities:users:2", 400)
+	fix := newFixture(t)
+	fix.funded("liabilities:users:1", 10000)
+	fix.open("liabilities:users:2", domain.Credit, false)
+	fix.transfer("liabilities:users:1", "liabilities:users:2", 400)
 
-	accts, err := f.l.Accounts(f.ctx, "liabilities:users")
+	accts, err := fix.ledger.Accounts(fix.ctx, "liabilities:users")
 	if err != nil {
 		t.Fatalf("Accounts: %v", err)
 	}
@@ -676,7 +676,7 @@ func TestQueries(t *testing.T) {
 		t.Errorf("Accounts(prefix) returned %d accounts, want 2", len(accts))
 	}
 
-	entries, err := f.l.Entries(f.ctx, domain.EntryQuery{Account: "liabilities:users:1"})
+	entries, err := fix.ledger.Entries(fix.ctx, domain.EntryQuery{Account: "liabilities:users:1"})
 	if err != nil {
 		t.Fatalf("Entries: %v", err)
 	}
@@ -687,20 +687,20 @@ func TestQueries(t *testing.T) {
 		t.Error("entries came back out of recorded order")
 	}
 
-	events, err := f.l.Events(f.ctx, 1, 100)
+	events, err := fix.ledger.Events(fix.ctx, 1, 100)
 	if err != nil {
 		t.Fatalf("Events: %v", err)
 	}
-	if len(events) != int(f.head().Seq) {
-		t.Errorf("Events returned %d, want %d", len(events), f.head().Seq)
+	if len(events) != int(fix.head().Seq) {
+		t.Errorf("Events returned %d, want %d", len(events), fix.head().Seq)
 	}
 }
 
 func TestVerify(t *testing.T) {
-	f := newFixture(t)
+	fix := newFixture(t)
 
 	// An empty ledger verifies, and reports that it holds nothing.
-	head, err := f.l.Verify(f.ctx)
+	head, err := fix.ledger.Verify(fix.ctx)
 	if err != nil {
 		t.Fatalf("Verify(empty): %v", err)
 	}
@@ -708,16 +708,16 @@ func TestVerify(t *testing.T) {
 		t.Errorf("Verify(empty) = %+v, want the zero head", head)
 	}
 
-	f.funded("liabilities:users:1", 10000)
-	f.open("revenue:fees", domain.Credit, false)
-	f.transfer("liabilities:users:1", "revenue:fees", 100)
+	fix.funded("liabilities:users:1", 10000)
+	fix.open("revenue:fees", domain.Credit, false)
+	fix.transfer("liabilities:users:1", "revenue:fees", 100)
 
-	head, err = f.l.Verify(f.ctx)
+	head, err = fix.ledger.Verify(fix.ctx)
 	if err != nil {
 		t.Fatalf("Verify: %v", err)
 	}
-	if head != f.head() {
-		t.Errorf("Verify = %+v, want the stream head %+v", head, f.head())
+	if head != fix.head() {
+		t.Errorf("Verify = %+v, want the stream head %+v", head, fix.head())
 	}
 }
 
@@ -725,9 +725,9 @@ func TestVerify(t *testing.T) {
 // part is to read the balance inside it. N callers may spend from an account
 // that can fund only some of them, and exactly that many must get through.
 func TestConcurrentSpendersCannotOverdraw(t *testing.T) {
-	f := newFixture(t)
-	f.funded("liabilities:users:1", 1000)
-	f.open("revenue:fees", domain.Credit, false)
+	fix := newFixture(t)
+	fix.funded("liabilities:users:1", 1000)
+	fix.open("revenue:fees", domain.Credit, false)
 
 	const (
 		callers = 25
@@ -743,7 +743,7 @@ func TestConcurrentSpendersCannotOverdraw(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, err := f.l.Commit(f.ctx, app.CommitCommand{
+			_, err := fix.ledger.Commit(fix.ctx, app.CommitCommand{
 				Postings: []domain.Posting{
 					domain.Dr("liabilities:users:1", domain.FromMinor(brl, each)),
 					domain.Cr("revenue:fees", domain.FromMinor(brl, each)),
@@ -766,7 +766,7 @@ func TestConcurrentSpendersCannotOverdraw(t *testing.T) {
 	if ok != 10 || refused != callers-10 {
 		t.Errorf("%d succeeded and %d were refused, want 10 and %d", ok, refused, callers-10)
 	}
-	if got := f.presented("liabilities:users:1"); got != 0 {
+	if got := fix.presented("liabilities:users:1"); got != 0 {
 		t.Errorf("balance = %d, want 0", got)
 	}
 }
@@ -774,10 +774,10 @@ func TestConcurrentSpendersCannotOverdraw(t *testing.T) {
 // N callers sharing one idempotency key must produce exactly one write, and
 // all of them must be told the same outcome.
 func TestConcurrentRetriesOfOneKey(t *testing.T) {
-	f := newFixture(t)
-	f.funded("liabilities:users:1", 10000)
-	f.open("revenue:fees", domain.Credit, false)
-	before := f.head()
+	fix := newFixture(t)
+	fix.funded("liabilities:users:1", 10000)
+	fix.open("revenue:fees", domain.Credit, false)
+	before := fix.head()
 
 	const callers = 20
 	var (
@@ -789,7 +789,7 @@ func TestConcurrentRetriesOfOneKey(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			res, err := f.l.Commit(f.ctx, app.CommitCommand{
+			res, err := fix.ledger.Commit(fix.ctx, app.CommitCommand{
 				IdempotencyKey: "pay-1",
 				Postings: []domain.Posting{
 					domain.Dr("liabilities:users:1", domain.FromMinor(brl, 100)),
@@ -807,8 +807,8 @@ func TestConcurrentRetriesOfOneKey(t *testing.T) {
 	}
 	wg.Wait()
 
-	if h := f.head(); h.Seq != before.Seq+1 {
-		t.Errorf("stream advanced by %d, want 1", h.Seq-before.Seq)
+	if head := fix.head(); head.Seq != before.Seq+1 {
+		t.Errorf("stream advanced by %d, want 1", head.Seq-before.Seq)
 	}
 	for _, res := range results {
 		if res.TransactionID != results[0].TransactionID || res.Seq != results[0].Seq {

@@ -66,13 +66,13 @@ type AccountOpened struct {
 func (AccountOpened) EventType() EventType { return EventAccountOpened }
 
 // Validate implements [Payload].
-func (p AccountOpened) Validate() error {
+func (opened AccountOpened) Validate() error {
 	// Check the name before rebuilding the account so a bad name is reported
 	// as such rather than as whatever the reconstruction trips over first.
-	if err := p.Name.Validate(); err != nil {
+	if err := opened.Name.Validate(); err != nil {
 		return err
 	}
-	acct, err := p.Account()
+	acct, err := opened.Account()
 	if err != nil {
 		return err
 	}
@@ -80,22 +80,22 @@ func (p AccountOpened) Validate() error {
 }
 
 // Account rebuilds the domain account this payload describes.
-func (p AccountOpened) Account() (Account, error) {
-	cur, err := NewCurrency(p.Currency, p.Scale)
+func (opened AccountOpened) Account() (Account, error) {
+	cur, err := NewCurrency(opened.Currency, opened.Scale)
 	if err != nil {
 		return Account{}, err
 	}
-	normal, err := ParseNormal(p.Normal)
+	normal, err := ParseNormal(opened.Normal)
 	if err != nil {
 		return Account{}, err
 	}
 	return Account{
-		Name:          p.Name,
+		Name:          opened.Name,
 		Currency:      cur,
 		Normal:        normal,
-		AllowNegative: p.AllowNegative,
-		Metadata:      p.Metadata,
-		OpenedAt:      NormalizeTime(p.OpenedAt),
+		AllowNegative: opened.AllowNegative,
+		Metadata:      opened.Metadata,
+		OpenedAt:      NormalizeTime(opened.OpenedAt),
 	}, nil
 }
 
@@ -128,8 +128,8 @@ type TransactionCommitted struct {
 func (TransactionCommitted) EventType() EventType { return EventTransactionCommitted }
 
 // Validate implements [Payload].
-func (p TransactionCommitted) Validate() error {
-	tx, err := p.Transaction()
+func (committed TransactionCommitted) Validate() error {
+	tx, err := committed.Transaction()
 	if err != nil {
 		return err
 	}
@@ -137,17 +137,17 @@ func (p TransactionCommitted) Validate() error {
 }
 
 // Transaction rebuilds the domain transaction this payload describes.
-func (p TransactionCommitted) Transaction() (Transaction, error) {
-	postings, err := postingsFromWire(p.Postings)
+func (committed TransactionCommitted) Transaction() (Transaction, error) {
+	postings, err := postingsFromWire(committed.Postings)
 	if err != nil {
 		return Transaction{}, err
 	}
 	return Transaction{
-		ID:          p.ID,
-		EffectiveAt: NormalizeTime(p.EffectiveAt),
+		ID:          committed.ID,
+		EffectiveAt: NormalizeTime(committed.EffectiveAt),
 		Postings:    postings,
-		Reference:   p.Reference,
-		Metadata:    p.Metadata,
+		Reference:   committed.Reference,
+		Metadata:    committed.Metadata,
 	}, nil
 }
 
@@ -182,14 +182,14 @@ type TransactionReverted struct {
 func (TransactionReverted) EventType() EventType { return EventTransactionReverted }
 
 // Validate implements [Payload].
-func (p TransactionReverted) Validate() error {
-	if p.RevertsID.IsZero() {
-		return fmt.Errorf("%w: reversal %s names no original transaction", ErrInvalidTransaction, p.ID)
+func (reverted TransactionReverted) Validate() error {
+	if reverted.RevertsID.IsZero() {
+		return fmt.Errorf("%w: reversal %s names no original transaction", ErrInvalidTransaction, reverted.ID)
 	}
-	if p.ID == p.RevertsID {
-		return fmt.Errorf("%w: transaction %s reverts itself", ErrInvalidTransaction, p.ID)
+	if reverted.ID == reverted.RevertsID {
+		return fmt.Errorf("%w: transaction %s reverts itself", ErrInvalidTransaction, reverted.ID)
 	}
-	tx, err := p.Transaction()
+	tx, err := reverted.Transaction()
 	if err != nil {
 		return err
 	}
@@ -197,17 +197,17 @@ func (p TransactionReverted) Validate() error {
 }
 
 // Transaction rebuilds the compensating transaction this payload describes.
-func (p TransactionReverted) Transaction() (Transaction, error) {
-	postings, err := postingsFromWire(p.Postings)
+func (reverted TransactionReverted) Transaction() (Transaction, error) {
+	postings, err := postingsFromWire(reverted.Postings)
 	if err != nil {
 		return Transaction{}, err
 	}
 	return Transaction{
-		ID:          p.ID,
-		EffectiveAt: NormalizeTime(p.EffectiveAt),
+		ID:          reverted.ID,
+		EffectiveAt: NormalizeTime(reverted.EffectiveAt),
 		Postings:    postings,
-		Reference:   p.Reference,
-		Metadata:    p.Metadata,
+		Reference:   reverted.Reference,
+		Metadata:    reverted.Metadata,
 	}, nil
 }
 
@@ -229,12 +229,12 @@ func NewTransactionReverted(original Transaction, id ID, effectiveAt time.Time, 
 
 func postingsToWire(postings []Posting) []PostingWire {
 	out := make([]PostingWire, len(postings))
-	for i, p := range postings {
+	for i, posting := range postings {
 		out[i] = PostingWire{
-			Account:  p.Account,
-			Amount:   p.Amount.Format(),
-			Currency: p.Amount.Currency().Code,
-			Scale:    p.Amount.Currency().Scale,
+			Account:  posting.Account,
+			Amount:   posting.Amount.Format(),
+			Currency: posting.Amount.Currency().Code,
+			Scale:    posting.Amount.Currency().Scale,
 		}
 	}
 	return out
@@ -242,16 +242,16 @@ func postingsToWire(postings []Posting) []PostingWire {
 
 func postingsFromWire(wire []PostingWire) ([]Posting, error) {
 	out := make([]Posting, len(wire))
-	for i, w := range wire {
-		cur, err := NewCurrency(w.Currency, w.Scale)
+	for i, wirePosting := range wire {
+		cur, err := NewCurrency(wirePosting.Currency, wirePosting.Scale)
 		if err != nil {
 			return nil, fmt.Errorf("posting %d: %w", i, err)
 		}
-		amt, err := ParseAmount(cur, w.Amount)
+		amt, err := ParseAmount(cur, wirePosting.Amount)
 		if err != nil {
 			return nil, fmt.Errorf("posting %d: %w", i, err)
 		}
-		out[i] = Posting{Account: w.Account, Amount: amt}
+		out[i] = Posting{Account: wirePosting.Account, Amount: amt}
 	}
 	return out, nil
 }
@@ -297,10 +297,10 @@ type Event struct {
 // GenesisHash is the PrevHash of the first event in a ledger.
 var GenesisHash = [32]byte{}
 
-// NewEvent builds an unsealed event carrying p. The returned event has no Seq
-// and no hashes; [Event.Seal] assigns those when the event is appended, since
-// its position in the stream is not known until then.
-func NewEvent(ledgerID string, p Payload, recordedAt time.Time, idempotencyKey string) (Event, error) {
+// NewEvent builds an unsealed event carrying payload. The returned event has no
+// Seq and no hashes. [Event.Seal] assigns those when the event is appended,
+// because its position in the stream is not known until then.
+func NewEvent(ledgerID string, payload Payload, recordedAt time.Time, idempotencyKey string) (Event, error) {
 	if err := ValidateLedgerID(ledgerID); err != nil {
 		return Event{}, err
 	}
@@ -308,18 +308,18 @@ func NewEvent(ledgerID string, p Payload, recordedAt time.Time, idempotencyKey s
 		return Event{}, fmt.Errorf("%w: idempotency key is %d bytes, max %d",
 			ErrInvalidID, len(idempotencyKey), MaxIdempotencyKeyLen)
 	}
-	if err := p.Validate(); err != nil {
+	if err := payload.Validate(); err != nil {
 		return Event{}, err
 	}
-	payload, err := canonicalJSON(p)
+	encoded, err := canonicalJSON(payload)
 	if err != nil {
 		return Event{}, err
 	}
 	return Event{
 		ID:             NewID(),
 		LedgerID:       ledgerID,
-		Type:           p.EventType(),
-		Payload:        payload,
+		Type:           payload.EventType(),
+		Payload:        encoded,
 		RecordedAt:     NormalizeTime(recordedAt),
 		IdempotencyKey: idempotencyKey,
 	}, nil
@@ -346,26 +346,26 @@ func (e Event) Verify() error {
 // prefixes make the encoding unambiguous: without them, two different events
 // could concatenate to the same bytes and collide.
 func (e Event) computeHash() [32]byte {
-	h := sha256.New()
-	writeChunk(h, []byte(hashDomain))
-	writeChunk(h, e.PrevHash[:])
+	hasher := sha256.New()
+	writeChunk(hasher, []byte(hashDomain))
+	writeChunk(hasher, e.PrevHash[:])
 	var seq [8]byte
 	binary.BigEndian.PutUint64(seq[:], uint64(e.Seq))
-	writeChunk(h, seq[:])
-	writeChunk(h, e.ID[:])
-	writeChunk(h, []byte(e.LedgerID))
-	writeChunk(h, []byte(e.Type))
-	writeChunk(h, []byte(e.RecordedAt.Format(time.RFC3339Nano)))
-	writeChunk(h, []byte(e.IdempotencyKey))
-	writeChunk(h, e.Payload)
-	return [32]byte(h.Sum(nil))
+	writeChunk(hasher, seq[:])
+	writeChunk(hasher, e.ID[:])
+	writeChunk(hasher, []byte(e.LedgerID))
+	writeChunk(hasher, []byte(e.Type))
+	writeChunk(hasher, []byte(e.RecordedAt.Format(time.RFC3339Nano)))
+	writeChunk(hasher, []byte(e.IdempotencyKey))
+	writeChunk(hasher, e.Payload)
+	return [32]byte(hasher.Sum(nil))
 }
 
-func writeChunk(h interface{ Write([]byte) (int, error) }, b []byte) {
-	var n [8]byte
-	binary.BigEndian.PutUint64(n[:], uint64(len(b)))
-	h.Write(n[:])
-	h.Write(b)
+func writeChunk(hasher interface{ Write([]byte) (int, error) }, chunk []byte) {
+	var lengthPrefix [8]byte
+	binary.BigEndian.PutUint64(lengthPrefix[:], uint64(len(chunk)))
+	hasher.Write(lengthPrefix[:])
+	hasher.Write(chunk)
 }
 
 // DecodePayload returns the typed payload carried by the event.
@@ -388,13 +388,13 @@ func (e Event) DecodePayload() (Payload, error) {
 	}
 	// Return the value, not the pointer, so callers type-switch on the same
 	// types they constructed.
-	switch p := target.(type) {
+	switch decoded := target.(type) {
 	case *AccountOpened:
-		return *p, nil
+		return *decoded, nil
 	case *TransactionCommitted:
-		return *p, nil
+		return *decoded, nil
 	case *TransactionReverted:
-		return *p, nil
+		return *decoded, nil
 	default:
 		panic("unreachable")
 	}
@@ -406,19 +406,19 @@ func (e Event) DecodePayload() (Payload, error) {
 // [GenesisHash] for a whole stream or the hash of the last verified event when
 // checking a chunk at a time.
 func VerifyChain(events []Event, startSeq int64, prev [32]byte) ([32]byte, error) {
-	for i, e := range events {
+	for i, event := range events {
 		switch {
-		case e.Seq != startSeq+int64(i):
+		case event.Seq != startSeq+int64(i):
 			return prev, fmt.Errorf("%w: expected event %d, found %d",
-				ErrChainBroken, startSeq+int64(i), e.Seq)
-		case e.PrevHash != prev:
+				ErrChainBroken, startSeq+int64(i), event.Seq)
+		case event.PrevHash != prev:
 			return prev, fmt.Errorf("%w: event %d links to %x, expected %x",
-				ErrChainBroken, e.Seq, e.PrevHash[:8], prev[:8])
+				ErrChainBroken, event.Seq, event.PrevHash[:8], prev[:8])
 		}
-		if err := e.Verify(); err != nil {
+		if err := event.Verify(); err != nil {
 			return prev, err
 		}
-		prev = e.Hash
+		prev = event.Hash
 	}
 	return prev, nil
 }
@@ -451,8 +451,8 @@ func ValidateLedgerID(id string) error {
 // canonical form also survives the payload being decoded and re-encoded by
 // another implementation -- which is exactly what an auditor verifying the
 // chain independently would do.
-func canonicalJSON(v any) ([]byte, error) {
-	raw, err := json.Marshal(v)
+func canonicalJSON(value any) ([]byte, error) {
+	raw, err := json.Marshal(value)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrEncoding, err)
 	}
@@ -469,12 +469,12 @@ func canonicalJSON(v any) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-func writeCanonical(buf *bytes.Buffer, v any) error {
-	switch t := v.(type) {
+func writeCanonical(buf *bytes.Buffer, value any) error {
+	switch node := value.(type) {
 	case nil:
 		buf.WriteString("null")
 	case bool:
-		if t {
+		if node {
 			buf.WriteString("true")
 		} else {
 			buf.WriteString("false")
@@ -482,22 +482,22 @@ func writeCanonical(buf *bytes.Buffer, v any) error {
 	case json.Number:
 		// Floating-point has no place in a ledger, and its shortest
 		// representation is not stable enough to hash. Money is already
-		// encoded as a decimal string; anything else numeric is a count.
-		if strings.ContainsAny(t.String(), ".eE") {
-			return fmt.Errorf("%w: non-integer number %s in payload", ErrEncoding, t)
+		// encoded as a decimal string. Anything else numeric is a count.
+		if strings.ContainsAny(node.String(), ".eE") {
+			return fmt.Errorf("%w: non-integer number %s in payload", ErrEncoding, node)
 		}
-		buf.WriteString(t.String())
+		buf.WriteString(node.String())
 	case string:
 		// Delegate string escaping to encoding/json so the output stays valid
 		// JSON for every rune, including the ones that need \u escapes.
-		esc, err := json.Marshal(t)
+		esc, err := json.Marshal(node)
 		if err != nil {
 			return fmt.Errorf("%w: %v", ErrEncoding, err)
 		}
 		buf.Write(esc)
 	case []any:
 		buf.WriteByte('[')
-		for i, item := range t {
+		for i, item := range node {
 			if i > 0 {
 				buf.WriteByte(',')
 			}
@@ -507,27 +507,27 @@ func writeCanonical(buf *bytes.Buffer, v any) error {
 		}
 		buf.WriteByte(']')
 	case map[string]any:
-		keys := make([]string, 0, len(t))
-		for k := range t {
-			keys = append(keys, k)
+		keys := make([]string, 0, len(node))
+		for key := range node {
+			keys = append(keys, key)
 		}
 		sort.Strings(keys)
 		buf.WriteByte('{')
-		for i, k := range keys {
+		for i, key := range keys {
 			if i > 0 {
 				buf.WriteByte(',')
 			}
-			if err := writeCanonical(buf, k); err != nil {
+			if err := writeCanonical(buf, key); err != nil {
 				return err
 			}
 			buf.WriteByte(':')
-			if err := writeCanonical(buf, t[k]); err != nil {
+			if err := writeCanonical(buf, node[key]); err != nil {
 				return err
 			}
 		}
 		buf.WriteByte('}')
 	default:
-		return fmt.Errorf("%w: unsupported type %T in payload", ErrEncoding, v)
+		return fmt.Errorf("%w: unsupported type %T in payload", ErrEncoding, value)
 	}
 	return nil
 }

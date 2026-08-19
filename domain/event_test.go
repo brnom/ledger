@@ -36,17 +36,17 @@ func goldenEvent(t *testing.T) Event {
 	if err != nil {
 		t.Fatalf("NewTransactionCommitted: %v", err)
 	}
-	e, err := NewEvent("main", payload, time.Date(2026, 8, 18, 12, 0, 1, 500000, time.UTC), "key-1")
+	event, err := NewEvent("main", payload, time.Date(2026, 8, 18, 12, 0, 1, 500000, time.UTC), "key-1")
 	if err != nil {
 		t.Fatalf("NewEvent: %v", err)
 	}
-	e.ID = mustID(t, "01920000-0000-7000-8000-0000000000ff")
-	e.Seal(1, GenesisHash)
-	return e
+	event.ID = mustID(t, "01920000-0000-7000-8000-0000000000ff")
+	event.Seal(1, GenesisHash)
+	return event
 }
 
 func TestCanonicalJSONGolden(t *testing.T) {
-	e := goldenEvent(t)
+	event := goldenEvent(t)
 	const want = `{"effective_at":"2026-08-18T12:00:00Z","id":"01920000-0000-7000-8000-000000000001",` +
 		`"metadata":{"acquirer":"cielo","channel":"pix"},` +
 		`"postings":[` +
@@ -54,27 +54,27 @@ func TestCanonicalJSONGolden(t *testing.T) {
 		`{"account":"assets:cash","amount":"95.00","currency":"BRL","scale":2},` +
 		`{"account":"expenses:fees","amount":"5.00","currency":"BRL","scale":2}],` +
 		`"reference":"e2e-abc"}`
-	if got := string(e.Payload); got != want {
+	if got := string(event.Payload); got != want {
 		t.Errorf("canonical payload:\n got %s\nwant %s", got, want)
 	}
 }
 
 func TestCanonicalJSONIsDeterministic(t *testing.T) {
-	p := AccountOpened{
+	opened := AccountOpened{
 		Name: "assets:cash", Currency: "BRL", Scale: 2, Normal: "debit",
 		OpenedAt: testTime,
 		Metadata: map[string]string{
 			"z": "1", "a": "2", "m": "3", "b": "4", "y": "5", "c": "6", "x": "7", "d": "8",
 		},
 	}
-	first, err := canonicalJSON(p)
+	first, err := canonicalJSON(opened)
 	if err != nil {
 		t.Fatalf("canonicalJSON: %v", err)
 	}
 	// Go randomizes map iteration order, so repeating the encode is a real
 	// test that key ordering does not leak into the bytes we hash.
 	for i := 0; i < 200; i++ {
-		again, err := canonicalJSON(p)
+		again, err := canonicalJSON(opened)
 		if err != nil {
 			t.Fatalf("canonicalJSON: %v", err)
 		}
@@ -116,22 +116,22 @@ func TestCanonicalJSONEscapesAndNests(t *testing.T) {
 // changed and every chain already in storage is invalidated: bump hashDomain
 // deliberately rather than editing the expectation.
 func TestEventHashGolden(t *testing.T) {
-	e := goldenEvent(t)
+	event := goldenEvent(t)
 	const want = "013e615c675a7b9962dfd7e3061401a8f61d86588ebab029110a8a5f00f2347a"
-	if got := hex.EncodeToString(e.Hash[:]); got != want {
+	if got := hex.EncodeToString(event.Hash[:]); got != want {
 		t.Errorf("event hash = %s, want %s", got, want)
 	}
 }
 
 func TestEventSealAndVerify(t *testing.T) {
-	e := goldenEvent(t)
-	if e.Seq != 1 {
-		t.Errorf("Seq = %d, want 1", e.Seq)
+	event := goldenEvent(t)
+	if event.Seq != 1 {
+		t.Errorf("Seq = %d, want 1", event.Seq)
 	}
-	if e.PrevHash != GenesisHash {
-		t.Errorf("PrevHash = %x, want genesis", e.PrevHash)
+	if event.PrevHash != GenesisHash {
+		t.Errorf("PrevHash = %x, want genesis", event.PrevHash)
 	}
-	if err := e.Verify(); err != nil {
+	if err := event.Verify(); err != nil {
 		t.Errorf("Verify() = %v, want nil", err)
 	}
 }
@@ -141,22 +141,22 @@ func TestEventDetectsTampering(t *testing.T) {
 		name   string
 		mutate func(*Event)
 	}{
-		{"payload", func(e *Event) {
-			e.Payload = []byte(strings.Replace(string(e.Payload), "95.00", "99.00", 1))
+		{"payload", func(event *Event) {
+			event.Payload = []byte(strings.Replace(string(event.Payload), "95.00", "99.00", 1))
 		}},
-		{"sequence", func(e *Event) { e.Seq = 2 }},
-		{"ledger", func(e *Event) { e.LedgerID = "other" }},
-		{"type", func(e *Event) { e.Type = EventAccountOpened }},
-		{"recorded time", func(e *Event) { e.RecordedAt = e.RecordedAt.Add(time.Microsecond) }},
-		{"idempotency key", func(e *Event) { e.IdempotencyKey = "key-2" }},
-		{"event id", func(e *Event) { e.ID = NewID() }},
-		{"prev hash", func(e *Event) { e.PrevHash[0] ^= 0xff }},
+		{"sequence", func(event *Event) { event.Seq = 2 }},
+		{"ledger", func(event *Event) { event.LedgerID = "other" }},
+		{"type", func(event *Event) { event.Type = EventAccountOpened }},
+		{"recorded time", func(event *Event) { event.RecordedAt = event.RecordedAt.Add(time.Microsecond) }},
+		{"idempotency key", func(event *Event) { event.IdempotencyKey = "key-2" }},
+		{"event id", func(event *Event) { event.ID = NewID() }},
+		{"prev hash", func(event *Event) { event.PrevHash[0] ^= 0xff }},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			e := goldenEvent(t)
-			tt.mutate(&e)
-			if err := e.Verify(); !errors.Is(err, ErrChainBroken) {
+			event := goldenEvent(t)
+			tt.mutate(&event)
+			if err := event.Verify(); !errors.Is(err, ErrChainBroken) {
 				t.Errorf("Verify() after editing %s = %v, want ErrChainBroken", tt.name, err)
 			}
 		})
@@ -175,13 +175,13 @@ func buildChain(t *testing.T, n int) []Event {
 		if err != nil {
 			t.Fatalf("NewTransactionCommitted: %v", err)
 		}
-		e, err := NewEvent("main", payload, testTime.Add(time.Duration(i)*time.Second), "")
+		event, err := NewEvent("main", payload, testTime.Add(time.Duration(i)*time.Second), "")
 		if err != nil {
 			t.Fatalf("NewEvent: %v", err)
 		}
-		e.Seal(int64(i+1), prev)
-		prev = e.Hash
-		events = append(events, e)
+		event.Seal(int64(i+1), prev)
+		prev = event.Hash
+		events = append(events, event)
 	}
 	return events
 }
@@ -267,11 +267,11 @@ func TestDecodePayloadRoundTrip(t *testing.T) {
 
 	for _, want := range []Payload{opened, committed, reverted} {
 		t.Run(string(want.EventType()), func(t *testing.T) {
-			e, err := NewEvent("main", want, testTime, "")
+			event, err := NewEvent("main", want, testTime, "")
 			if err != nil {
 				t.Fatalf("NewEvent: %v", err)
 			}
-			got, err := e.DecodePayload()
+			got, err := event.DecodePayload()
 			if err != nil {
 				t.Fatalf("DecodePayload: %v", err)
 			}
@@ -284,23 +284,23 @@ func TestDecodePayloadRoundTrip(t *testing.T) {
 			if err != nil {
 				t.Fatalf("canonicalJSON: %v", err)
 			}
-			if string(again) != string(e.Payload) {
-				t.Errorf("re-encode differs:\n got %s\nwant %s", again, e.Payload)
+			if string(again) != string(event.Payload) {
+				t.Errorf("re-encode differs:\n got %s\nwant %s", again, event.Payload)
 			}
 		})
 	}
 }
 
 func TestDecodePayloadRejectsUnknown(t *testing.T) {
-	e := goldenEvent(t)
-	e.Type = "account.frozen"
-	if _, err := e.DecodePayload(); !errors.Is(err, ErrUnknownEvent) {
+	event := goldenEvent(t)
+	event.Type = "account.frozen"
+	if _, err := event.DecodePayload(); !errors.Is(err, ErrUnknownEvent) {
 		t.Errorf("err = %v, want ErrUnknownEvent", err)
 	}
 
-	e = goldenEvent(t)
-	e.Payload = []byte(`{"id":"01920000-0000-7000-8000-000000000001","surprise":true}`)
-	if _, err := e.DecodePayload(); !errors.Is(err, ErrUnknownEvent) {
+	event = goldenEvent(t)
+	event.Payload = []byte(`{"id":"01920000-0000-7000-8000-000000000001","surprise":true}`)
+	if _, err := event.DecodePayload(); !errors.Is(err, ErrUnknownEvent) {
 		t.Errorf("unknown field: err = %v, want ErrUnknownEvent", err)
 	}
 }
@@ -370,18 +370,18 @@ func TestEventHashSurvivesTimeTruncation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewTransactionCommitted: %v", err)
 	}
-	e, err := NewEvent("main", payload, time.Date(2026, 8, 18, 12, 0, 0, 987654321, time.UTC), "")
+	event, err := NewEvent("main", payload, time.Date(2026, 8, 18, 12, 0, 0, 987654321, time.UTC), "")
 	if err != nil {
 		t.Fatalf("NewEvent: %v", err)
 	}
-	e.Seal(1, GenesisHash)
+	event.Seal(1, GenesisHash)
 
-	if e.RecordedAt.Nanosecond()%1000 != 0 {
-		t.Errorf("RecordedAt = %v, want microsecond precision", e.RecordedAt)
+	if event.RecordedAt.Nanosecond()%1000 != 0 {
+		t.Errorf("RecordedAt = %v, want microsecond precision", event.RecordedAt)
 	}
 	// Simulate the storage round trip.
-	e.RecordedAt = e.RecordedAt.Truncate(time.Microsecond)
-	if err := e.Verify(); err != nil {
+	event.RecordedAt = event.RecordedAt.Truncate(time.Microsecond)
+	if err := event.Verify(); err != nil {
 		t.Errorf("Verify() after a storage round trip = %v, want nil", err)
 	}
 }
@@ -401,13 +401,13 @@ func TestEventHashIsLocationIndependent(t *testing.T) {
 		if err != nil {
 			t.Fatalf("NewTransactionCommitted: %v", err)
 		}
-		e, err := NewEvent("main", payload, when, "")
+		event, err := NewEvent("main", payload, when, "")
 		if err != nil {
 			t.Fatalf("NewEvent: %v", err)
 		}
-		e.ID = mustID(t, "01920000-0000-7000-8000-0000000000ff")
-		e.Seal(1, GenesisHash)
-		return e.Hash
+		event.ID = mustID(t, "01920000-0000-7000-8000-0000000000ff")
+		event.Seal(1, GenesisHash)
+		return event.Hash
 	}
 	if hashAt(utc) != hashAt(local) {
 		t.Error("the same instant hashed differently in two time zones")

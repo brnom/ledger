@@ -104,14 +104,14 @@ func (n Normal) String() string {
 }
 
 // ParseNormal parses "debit" or "credit".
-func ParseNormal(s string) (Normal, error) {
-	switch s {
+func ParseNormal(text string) (Normal, error) {
+	switch text {
 	case "debit":
 		return Debit, nil
 	case "credit":
 		return Credit, nil
 	default:
-		return 0, fmt.Errorf("%w: unknown normal balance %q", ErrInvalidAccount, s)
+		return 0, fmt.Errorf("%w: unknown normal balance %q", ErrInvalidAccount, text)
 	}
 }
 
@@ -168,18 +168,18 @@ const (
 	MaxMetadataValueLen = 1024
 )
 
-func validateMetadata(m map[string]string) error {
-	if len(m) > MaxMetadataPairs {
-		return fmt.Errorf("%w: %d metadata keys, max %d", ErrInvalidAccount, len(m), MaxMetadataPairs)
+func validateMetadata(metadata map[string]string) error {
+	if len(metadata) > MaxMetadataPairs {
+		return fmt.Errorf("%w: %d metadata keys, max %d", ErrInvalidAccount, len(metadata), MaxMetadataPairs)
 	}
-	for k, v := range m {
+	for key, value := range metadata {
 		switch {
-		case k == "":
+		case key == "":
 			return fmt.Errorf("%w: metadata has an empty key", ErrInvalidAccount)
-		case len(k) > MaxMetadataKeyLen:
-			return fmt.Errorf("%w: metadata key %q exceeds %d bytes", ErrInvalidAccount, k, MaxMetadataKeyLen)
-		case len(v) > MaxMetadataValueLen:
-			return fmt.Errorf("%w: metadata value for %q exceeds %d bytes", ErrInvalidAccount, k, MaxMetadataValueLen)
+		case len(key) > MaxMetadataKeyLen:
+			return fmt.Errorf("%w: metadata key %q exceeds %d bytes", ErrInvalidAccount, key, MaxMetadataKeyLen)
+		case len(value) > MaxMetadataValueLen:
+			return fmt.Errorf("%w: metadata value for %q exceeds %d bytes", ErrInvalidAccount, key, MaxMetadataValueLen)
 		}
 	}
 	return nil

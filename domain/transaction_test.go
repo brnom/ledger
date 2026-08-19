@@ -231,12 +231,12 @@ func TestTransactionReverse(t *testing.T) {
 
 	// Applying both leaves every account where it started.
 	net := map[AccountName]int64{}
-	for _, p := range append(append([]Posting{}, orig.Postings...), rev.Postings...) {
-		net[p.Account] += p.Amount.Minor()
+	for _, posting := range append(append([]Posting{}, orig.Postings...), rev.Postings...) {
+		net[posting.Account] += posting.Amount.Minor()
 	}
-	for acct, v := range net {
-		if v != 0 {
-			t.Errorf("account %q nets to %d after reversal, want 0", acct, v)
+	for acct, total := range net {
+		if total != 0 {
+			t.Errorf("account %q nets to %d after reversal, want 0", acct, total)
 		}
 	}
 }

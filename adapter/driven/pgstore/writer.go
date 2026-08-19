@@ -114,8 +114,8 @@ func (w *writer) Transaction(id domain.ID) (domain.RecordedTransaction, bool, er
 		}
 	}
 	if ok {
-		if by, reverted := w.revertedBy[id]; reverted {
-			rec.RevertedBy = by
+		if reversal, reverted := w.revertedBy[id]; reverted {
+			rec.RevertedBy = reversal
 		}
 	}
 	return rec, ok, nil
@@ -154,14 +154,14 @@ func (w *writer) Idempotency(key string) (domain.IdempotencyRecord, bool, error)
 
 // Stage seals the event onto the end of the stream and folds its projection
 // into the overlay. Nothing reaches the database until flush.
-func (w *writer) Stage(e *domain.Event) error {
-	if e.LedgerID != w.ledgerID {
+func (w *writer) Stage(event *domain.Event) error {
+	if event.LedgerID != w.ledgerID {
 		return fmt.Errorf("%w: event is for ledger %q, writer holds %q",
-			domain.ErrInvalidID, e.LedgerID, w.ledgerID)
+			domain.ErrInvalidID, event.LedgerID, w.ledgerID)
 	}
-	e.Seal(w.head.Seq+1, w.head.Hash)
+	event.Seal(w.head.Seq+1, w.head.Hash)
 
-	proj, err := domain.Project(*e)
+	proj, err := domain.Project(*event)
 	if err != nil {
 		return err
 	}
@@ -186,9 +186,9 @@ func (w *writer) Stage(e *domain.Event) error {
 		w.deltas[entry.Account] = next
 	}
 
-	w.events = append(w.events, *e)
+	w.events = append(w.events, *event)
 	w.entries = append(w.entries, proj.Entries...)
-	w.head = domain.Head{Seq: e.Seq, Hash: e.Hash}
+	w.head = domain.Head{Seq: event.Seq, Hash: event.Hash}
 	return nil
 }
 
@@ -207,17 +207,17 @@ func (w *writer) flush(ctx context.Context) error {
 
 	batch := &pgx.Batch{}
 
-	for _, e := range w.events {
+	for _, event := range w.events {
 		var key any
-		if e.IdempotencyKey != "" {
-			key = e.IdempotencyKey
+		if event.IdempotencyKey != "" {
+			key = event.IdempotencyKey
 		}
 		batch.Queue(`
 			INSERT INTO events (ledger_id, seq, event_id, type, payload,
 			                    recorded_at, idempotency_key, prev_hash, hash)
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-			w.ledgerID, e.Seq, toUUID(e.ID), string(e.Type), string(e.Payload),
-			e.RecordedAt, key, e.PrevHash[:], e.Hash[:])
+			w.ledgerID, event.Seq, toUUID(event.ID), string(event.Type), string(event.Payload),
+			event.RecordedAt, key, event.PrevHash[:], event.Hash[:])
 	}
 
 	for _, acct := range w.accounts {
@@ -246,15 +246,15 @@ func (w *writer) flush(ctx context.Context) error {
 			rec.Reference, metadata, toUUID(rec.Reverts))
 	}
 
-	for _, e := range w.entries {
+	for _, entry := range w.entries {
 		batch.Queue(`
 			INSERT INTO entries (ledger_id, seq, idx, account, amount_minor,
 			                     currency_code, currency_scale, tx_id, reference,
 			                     effective_at, recorded_at, reverts)
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
-			w.ledgerID, e.Seq, e.Index, string(e.Account), e.Amount.Minor(),
-			e.Amount.Currency().Code, int16(e.Amount.Currency().Scale),
-			toUUID(e.TxID), e.Reference, e.EffectiveAt, e.RecordedAt, toUUID(e.Reverts))
+			w.ledgerID, entry.Seq, entry.Index, string(entry.Account), entry.Amount.Minor(),
+			entry.Amount.Currency().Code, int16(entry.Amount.Currency().Scale),
+			toUUID(entry.TxID), entry.Reference, entry.EffectiveAt, entry.RecordedAt, toUUID(entry.Reverts))
 	}
 
 	// Running balances move by the command's net effect per account, computed
@@ -282,11 +282,11 @@ func (w *writer) flush(ctx context.Context) error {
 
 	// Link the reverted transactions last, guarded by "still NULL" so a second
 	// reversal cannot slip past even if the command layer somehow allowed it.
-	for original, by := range w.revertedBy {
+	for original, reversal := range w.revertedBy {
 		tag, err := w.tx.Exec(ctx, `
 			UPDATE transactions SET reverted_by = $3
 			WHERE ledger_id = $1 AND tx_id = $2 AND reverted_by IS NULL`,
-			w.ledgerID, toUUID(original), toUUID(by))
+			w.ledgerID, toUUID(original), toUUID(reversal))
 		if err != nil {
 			return wrapWriteError(err)
 		}
@@ -297,15 +297,15 @@ func (w *writer) flush(ctx context.Context) error {
 	return nil
 }
 
-func marshalMetadata(m map[string]string) ([]byte, error) {
-	if len(m) == 0 {
+func marshalMetadata(metadata map[string]string) ([]byte, error) {
+	if len(metadata) == 0 {
 		return []byte(`{}`), nil
 	}
-	b, err := json.Marshal(m)
+	encoded, err := json.Marshal(metadata)
 	if err != nil {
 		return nil, fmt.Errorf("%w: metadata: %v", domain.ErrEncoding, err)
 	}
-	return b, nil
+	return encoded, nil
 }
 
 var _ app.Writer = (*writer)(nil)

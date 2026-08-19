@@ -29,37 +29,37 @@ func newAPI(t *testing.T) *api {
 	t.Helper()
 	now := base
 	store := memstore.New()
-	l, err := app.Open(store, "main", app.WithClock(func() time.Time { return now }))
+	ledger, err := app.Open(store, "main", app.WithClock(func() time.Time { return now }))
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	srv := httptest.NewServer(httpapi.New(l, nil))
+	srv := httptest.NewServer(httpapi.New(ledger, nil))
 	t.Cleanup(srv.Close)
 	t.Cleanup(func() { store.Close() })
 	return &api{t: t, srv: srv, now: &now}
 }
 
 // do sends a request and decodes the response into out, returning the status.
-func (a *api) do(method, path, body string, headers map[string]string, out any) int {
-	a.t.Helper()
+func (c *api) do(method, path, body string, headers map[string]string, out any) int {
+	c.t.Helper()
 	var reader *strings.Reader
 	if body == "" {
 		reader = strings.NewReader("")
 	} else {
 		reader = strings.NewReader(body)
 	}
-	req, err := http.NewRequest(method, a.srv.URL+path, reader)
+	req, err := http.NewRequest(method, c.srv.URL+path, reader)
 	if err != nil {
-		a.t.Fatalf("NewRequest: %v", err)
+		c.t.Fatalf("NewRequest: %v", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
 
-	resp, err := a.srv.Client().Do(req)
+	resp, err := c.srv.Client().Do(req)
 	if err != nil {
-		a.t.Fatalf("%s %s: %v", method, path, err)
+		c.t.Fatalf("%s %s: %v", method, path, err)
 	}
 	defer resp.Body.Close()
 
@@ -67,28 +67,28 @@ func (a *api) do(method, path, body string, headers map[string]string, out any) 
 	buf.ReadFrom(resp.Body)
 	if out != nil && buf.Len() > 0 {
 		if err := json.Unmarshal(buf.Bytes(), out); err != nil {
-			a.t.Fatalf("%s %s: decoding %q: %v", method, path, buf.String(), err)
+			c.t.Fatalf("%s %s: decoding %q: %v", method, path, buf.String(), err)
 		}
 	}
 	return resp.StatusCode
 }
 
-func (a *api) openAccount(name string, normal string, allowNegative bool) {
-	a.t.Helper()
+func (c *api) openAccount(name string, normal string, allowNegative bool) {
+	c.t.Helper()
 	body := fmt.Sprintf(`{"name":%q,"currency":"BRL","normal":%q,"allow_negative":%t}`,
 		name, normal, allowNegative)
-	if code := a.do("POST", "/v1/accounts", body, nil, nil); code != http.StatusCreated {
-		a.t.Fatalf("opening %q returned %d", name, code)
+	if code := c.do("POST", "/v1/accounts", body, nil, nil); code != http.StatusCreated {
+		c.t.Fatalf("opening %q returned %d", name, code)
 	}
 }
 
 func TestHealth(t *testing.T) {
-	a := newAPI(t)
+	client := newAPI(t)
 	var out struct {
 		Status string `json:"status"`
 		Ledger string `json:"ledger"`
 	}
-	if code := a.do("GET", "/healthz", "", nil, &out); code != http.StatusOK {
+	if code := client.do("GET", "/healthz", "", nil, &out); code != http.StatusOK {
 		t.Fatalf("status = %d", code)
 	}
 	if out.Status != "ok" || out.Ledger != "main" {
@@ -97,7 +97,7 @@ func TestHealth(t *testing.T) {
 }
 
 func TestOpenAccountAndRead(t *testing.T) {
-	a := newAPI(t)
+	client := newAPI(t)
 	var created struct {
 		Account struct {
 			Name     string `json:"name"`
@@ -106,7 +106,7 @@ func TestOpenAccountAndRead(t *testing.T) {
 			Normal   string `json:"normal"`
 		} `json:"account"`
 	}
-	code := a.do("POST", "/v1/accounts",
+	code := client.do("POST", "/v1/accounts",
 		`{"name":"liabilities:users:1","currency":"BRL","normal":"credit"}`, nil, &created)
 	if code != http.StatusCreated {
 		t.Fatalf("status = %d, want 201", code)
@@ -118,7 +118,7 @@ func TestOpenAccountAndRead(t *testing.T) {
 	}
 
 	var fetched map[string]any
-	if code := a.do("GET", "/v1/accounts/liabilities:users:1", "", nil, &fetched); code != http.StatusOK {
+	if code := client.do("GET", "/v1/accounts/liabilities:users:1", "", nil, &fetched); code != http.StatusOK {
 		t.Fatalf("GET status = %d", code)
 	}
 	if fetched["name"] != "liabilities:users:1" {
@@ -127,9 +127,9 @@ func TestOpenAccountAndRead(t *testing.T) {
 }
 
 func TestOpenAccountUnknownCurrencyNeedsScale(t *testing.T) {
-	a := newAPI(t)
+	client := newAPI(t)
 	var problem httpapi.Problem
-	code := a.do("POST", "/v1/accounts",
+	code := client.do("POST", "/v1/accounts",
 		`{"name":"assets:points","currency":"PTS","normal":"debit"}`, nil, &problem)
 	if code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", code)
@@ -138,7 +138,7 @@ func TestOpenAccountUnknownCurrencyNeedsScale(t *testing.T) {
 		t.Errorf("detail = %q", problem.Detail)
 	}
 
-	code = a.do("POST", "/v1/accounts",
+	code = client.do("POST", "/v1/accounts",
 		`{"name":"assets:points","currency":"PTS","scale":0,"normal":"debit"}`, nil, nil)
 	if code != http.StatusCreated {
 		t.Errorf("with an explicit scale, status = %d, want 201", code)
@@ -146,15 +146,15 @@ func TestOpenAccountUnknownCurrencyNeedsScale(t *testing.T) {
 }
 
 func TestCommitAndBalance(t *testing.T) {
-	a := newAPI(t)
-	a.openAccount("equity:opening-balances", "credit", true)
-	a.openAccount("liabilities:users:1", "credit", false)
+	client := newAPI(t)
+	client.openAccount("equity:opening-balances", "credit", true)
+	client.openAccount("liabilities:users:1", "credit", false)
 
 	var res struct {
 		Seq           int64  `json:"seq"`
 		TransactionID string `json:"transaction_id"`
 	}
-	code := a.do("POST", "/v1/transactions", `{
+	code := client.do("POST", "/v1/transactions", `{
 		"reference": "e2e-1",
 		"postings": [
 			{"account":"equity:opening-balances","amount":"100.00","currency":"BRL"},
@@ -172,7 +172,7 @@ func TestCommitAndBalance(t *testing.T) {
 		Signed   string `json:"signed"`
 		Currency string `json:"currency"`
 	}
-	if code := a.do("GET", "/v1/accounts/liabilities:users:1/balance", "", nil, &balance); code != http.StatusOK {
+	if code := client.do("GET", "/v1/accounts/liabilities:users:1/balance", "", nil, &balance); code != http.StatusOK {
 		t.Fatalf("balance status = %d", code)
 	}
 	// The holder sees what they hold; the signed value is what sums to zero
@@ -189,7 +189,7 @@ func TestCommitAndBalance(t *testing.T) {
 			Direction string `json:"direction"`
 		} `json:"postings"`
 	}
-	if code := a.do("GET", "/v1/transactions/"+res.TransactionID, "", nil, &tx); code != http.StatusOK {
+	if code := client.do("GET", "/v1/transactions/"+res.TransactionID, "", nil, &tx); code != http.StatusOK {
 		t.Fatalf("transaction status = %d", code)
 	}
 	if len(tx.Postings) != 2 || tx.Postings[0].Direction != "debit" || tx.Postings[1].Direction != "credit" {
@@ -198,9 +198,9 @@ func TestCommitAndBalance(t *testing.T) {
 }
 
 func TestIdempotencyOverHTTP(t *testing.T) {
-	a := newAPI(t)
-	a.openAccount("equity:opening-balances", "credit", true)
-	a.openAccount("liabilities:users:1", "credit", false)
+	client := newAPI(t)
+	client.openAccount("equity:opening-balances", "credit", true)
+	client.openAccount("liabilities:users:1", "credit", false)
 
 	body := `{"postings":[
 		{"account":"equity:opening-balances","amount":"25.00","currency":"BRL"},
@@ -213,11 +213,11 @@ func TestIdempotencyOverHTTP(t *testing.T) {
 		TransactionID string `json:"transaction_id"`
 		Replayed      bool   `json:"replayed"`
 	}
-	if code := a.do("POST", "/v1/transactions", body, headers, &first); code != http.StatusCreated {
+	if code := client.do("POST", "/v1/transactions", body, headers, &first); code != http.StatusCreated {
 		t.Fatalf("first status = %d, want 201", code)
 	}
 	// A retry created nothing, so it is 200, not 201.
-	if code := a.do("POST", "/v1/transactions", body, headers, &second); code != http.StatusOK {
+	if code := client.do("POST", "/v1/transactions", body, headers, &second); code != http.StatusOK {
 		t.Fatalf("retry status = %d, want 200", code)
 	}
 	if !second.Replayed || second.TransactionID != first.TransactionID {
@@ -227,7 +227,7 @@ func TestIdempotencyOverHTTP(t *testing.T) {
 	// The same key with a different body is a conflict, not a retry.
 	conflicting := strings.Replace(body, "25.00", "30.00", 2)
 	var problem httpapi.Problem
-	if code := a.do("POST", "/v1/transactions", conflicting, headers, &problem); code != http.StatusConflict {
+	if code := client.do("POST", "/v1/transactions", conflicting, headers, &problem); code != http.StatusConflict {
 		t.Fatalf("conflicting status = %d, want 409", code)
 	}
 	if !strings.HasSuffix(problem.Type, "idempotency-conflict") {
@@ -237,9 +237,9 @@ func TestIdempotencyOverHTTP(t *testing.T) {
 
 // TestBitemporalOverHTTP exercises the query the whole design exists for.
 func TestBitemporalOverHTTP(t *testing.T) {
-	a := newAPI(t)
-	a.openAccount("equity:opening-balances", "credit", true)
-	a.openAccount("liabilities:users:1", "credit", false)
+	client := newAPI(t)
+	client.openAccount("equity:opening-balances", "credit", true)
+	client.openAccount("liabilities:users:1", "credit", false)
 
 	day1 := base
 	post := func(effectiveAt time.Time, amount string) {
@@ -250,7 +250,7 @@ func TestBitemporalOverHTTP(t *testing.T) {
 				{"account":"equity:opening-balances","amount":"%s","currency":"BRL"},
 				{"account":"liabilities:users:1","amount":"-%s","currency":"BRL"}
 			]}`, effectiveAt.Format(time.RFC3339), amount, amount)
-		if code := a.do("POST", "/v1/transactions", body, nil, nil); code != http.StatusCreated {
+		if code := client.do("POST", "/v1/transactions", body, nil, nil); code != http.StatusCreated {
 			t.Fatalf("commit returned %d", code)
 		}
 	}
@@ -259,10 +259,10 @@ func TestBitemporalOverHTTP(t *testing.T) {
 	var afterFirst struct {
 		Seq int64 `json:"seq"`
 	}
-	a.do("GET", "/healthz", "", nil, &afterFirst)
+	client.do("GET", "/healthz", "", nil, &afterFirst)
 
 	// Three days later, a late settlement describing day 2 arrives.
-	*a.now = base.Add(72 * time.Hour)
+	*client.now = base.Add(72 * time.Hour)
 	post(day1.Add(24*time.Hour), "25.00")
 
 	balanceAt := func(query string) string {
@@ -270,7 +270,7 @@ func TestBitemporalOverHTTP(t *testing.T) {
 		var out struct {
 			Balance string `json:"balance"`
 		}
-		if code := a.do("GET", "/v1/accounts/liabilities:users:1/balance"+query, "", nil, &out); code != http.StatusOK {
+		if code := client.do("GET", "/v1/accounts/liabilities:users:1/balance"+query, "", nil, &out); code != http.StatusOK {
 			t.Fatalf("balance%s returned %d", query, code)
 		}
 		return out.Balance
@@ -288,25 +288,25 @@ func TestBitemporalOverHTTP(t *testing.T) {
 }
 
 func TestRevertOverHTTP(t *testing.T) {
-	a := newAPI(t)
-	a.openAccount("equity:opening-balances", "credit", true)
-	a.openAccount("liabilities:users:1", "credit", false)
+	client := newAPI(t)
+	client.openAccount("equity:opening-balances", "credit", true)
+	client.openAccount("liabilities:users:1", "credit", false)
 
 	var committed struct {
 		TransactionID string `json:"transaction_id"`
 	}
-	a.do("POST", "/v1/transactions", `{"postings":[
+	client.do("POST", "/v1/transactions", `{"postings":[
 		{"account":"equity:opening-balances","amount":"40.00","currency":"BRL"},
 		{"account":"liabilities:users:1","amount":"-40.00","currency":"BRL"}
 	]}`, nil, &committed)
 
 	path := "/v1/transactions/" + committed.TransactionID + "/revert"
-	if code := a.do("POST", path, `{"reason":"chargeback"}`, nil, nil); code != http.StatusCreated {
+	if code := client.do("POST", path, `{"reason":"chargeback"}`, nil, nil); code != http.StatusCreated {
 		t.Fatalf("revert status = %d, want 201", code)
 	}
 	// An empty body is allowed: every field of a reversal has a default.
 	var problem httpapi.Problem
-	if code := a.do("POST", path, "", nil, &problem); code != http.StatusConflict {
+	if code := client.do("POST", path, "", nil, &problem); code != http.StatusConflict {
 		t.Fatalf("second revert status = %d, want 409", code)
 	}
 	if !strings.HasSuffix(problem.Type, "already-reverted") {
@@ -316,18 +316,18 @@ func TestRevertOverHTTP(t *testing.T) {
 	var balance struct {
 		Balance string `json:"balance"`
 	}
-	a.do("GET", "/v1/accounts/liabilities:users:1/balance", "", nil, &balance)
+	client.do("GET", "/v1/accounts/liabilities:users:1/balance", "", nil, &balance)
 	if balance.Balance != "0.00" {
 		t.Errorf("balance after reversal = %s, want 0.00", balance.Balance)
 	}
 }
 
 func TestEntriesPagination(t *testing.T) {
-	a := newAPI(t)
-	a.openAccount("equity:opening-balances", "credit", true)
-	a.openAccount("liabilities:users:1", "credit", false)
+	client := newAPI(t)
+	client.openAccount("equity:opening-balances", "credit", true)
+	client.openAccount("liabilities:users:1", "credit", false)
 	for i := 0; i < 10; i++ {
-		a.do("POST", "/v1/transactions", `{"postings":[
+		client.do("POST", "/v1/transactions", `{"postings":[
 			{"account":"equity:opening-balances","amount":"1.00","currency":"BRL"},
 			{"account":"liabilities:users:1","amount":"-1.00","currency":"BRL"}
 		]}`, nil, nil)
@@ -349,32 +349,32 @@ func TestEntriesPagination(t *testing.T) {
 		query = "?limit=6"
 	)
 	for i := 0; i < 20; i++ {
-		var p page
-		if code := a.do("GET", "/v1/entries"+query, "", nil, &p); code != http.StatusOK {
+		var body page
+		if code := client.do("GET", "/v1/entries"+query, "", nil, &body); code != http.StatusOK {
 			t.Fatalf("entries status = %d", code)
 		}
-		total += len(p.Entries)
-		if p.Next == nil {
+		total += len(body.Entries)
+		if body.Next == nil {
 			break
 		}
-		query = fmt.Sprintf("?limit=6&after_seq=%d&after_index=%d", p.Next.AfterSeq, p.Next.AfterIndex)
+		query = fmt.Sprintf("?limit=6&after_seq=%d&after_index=%d", body.Next.AfterSeq, body.Next.AfterIndex)
 	}
 	if total != 20 {
 		t.Errorf("paged through %d entries, want 20", total)
 	}
 
 	var scoped page
-	a.do("GET", "/v1/accounts/liabilities:users:1/entries?limit=100", "", nil, &scoped)
+	client.do("GET", "/v1/accounts/liabilities:users:1/entries?limit=100", "", nil, &scoped)
 	if len(scoped.Entries) != 10 {
 		t.Errorf("account entries = %d, want 10", len(scoped.Entries))
 	}
 }
 
 func TestEventsAndVerify(t *testing.T) {
-	a := newAPI(t)
-	a.openAccount("equity:opening-balances", "credit", true)
-	a.openAccount("liabilities:users:1", "credit", false)
-	a.do("POST", "/v1/transactions", `{"postings":[
+	client := newAPI(t)
+	client.openAccount("equity:opening-balances", "credit", true)
+	client.openAccount("liabilities:users:1", "credit", false)
+	client.do("POST", "/v1/transactions", `{"postings":[
 		{"account":"equity:opening-balances","amount":"5.00","currency":"BRL"},
 		{"account":"liabilities:users:1","amount":"-5.00","currency":"BRL"}
 	]}`, nil, nil)
@@ -388,7 +388,7 @@ func TestEventsAndVerify(t *testing.T) {
 			Hash     string          `json:"hash"`
 		} `json:"events"`
 	}
-	if code := a.do("GET", "/v1/events", "", nil, &events); code != http.StatusOK {
+	if code := client.do("GET", "/v1/events", "", nil, &events); code != http.StatusOK {
 		t.Fatalf("events status = %d", code)
 	}
 	if len(events.Events) != 3 {
@@ -409,7 +409,7 @@ func TestEventsAndVerify(t *testing.T) {
 		Verified bool  `json:"verified"`
 		Seq      int64 `json:"seq"`
 	}
-	if code := a.do("GET", "/v1/verify", "", nil, &verify); code != http.StatusOK {
+	if code := client.do("GET", "/v1/verify", "", nil, &verify); code != http.StatusOK {
 		t.Fatalf("verify status = %d", code)
 	}
 	if !verify.Verified || verify.Seq != 3 {
@@ -420,9 +420,9 @@ func TestEventsAndVerify(t *testing.T) {
 // TestErrorMapping pins the contract a client codes against: which failures
 // are the caller's fault, which are retryable, and which are permanent.
 func TestErrorMapping(t *testing.T) {
-	a := newAPI(t)
-	a.openAccount("equity:opening-balances", "credit", true)
-	a.openAccount("liabilities:users:1", "credit", false)
+	client := newAPI(t)
+	client.openAccount("equity:opening-balances", "credit", true)
+	client.openAccount("liabilities:users:1", "credit", false)
 
 	tests := []struct {
 		name       string
@@ -509,7 +509,7 @@ func TestErrorMapping(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var problem httpapi.Problem
-			code := a.do(tt.method, tt.path, tt.body, nil, &problem)
+			code := client.do(tt.method, tt.path, tt.body, nil, &problem)
 			if code != tt.wantStatus {
 				t.Fatalf("status = %d, want %d (problem %+v)", code, tt.wantStatus, problem)
 			}
@@ -527,10 +527,10 @@ func TestErrorMapping(t *testing.T) {
 }
 
 func TestBodySizeLimit(t *testing.T) {
-	a := newAPI(t)
+	client := newAPI(t)
 	huge := `{"name":"assets:x","currency":"BRL","normal":"debit","metadata":{"k":"` +
 		strings.Repeat("v", httpapi.MaxBodyBytes+1) + `"}}`
-	if code := a.do("POST", "/v1/accounts", huge, nil, nil); code != http.StatusBadRequest {
+	if code := client.do("POST", "/v1/accounts", huge, nil, nil); code != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400", code)
 	}
 }
@@ -569,9 +569,9 @@ func (s stubLedger) Revert(context.Context, app.RevertCommand) (app.Result, erro
 	return app.Result{}, nil
 }
 
-func (s stubLedger) Balance(ctx context.Context, q domain.BalanceQuery) (domain.Amount, error) {
+func (s stubLedger) Balance(ctx context.Context, query domain.BalanceQuery) (domain.Amount, error) {
 	if s.balance != nil {
-		return s.balance(ctx, q)
+		return s.balance(ctx, query)
 	}
 	return domain.Zero(domain.MustCurrency("BRL")), nil
 }

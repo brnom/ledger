@@ -69,8 +69,8 @@ var errorMap = []struct {
 // the HTTP layer itself rather than in the ledger.
 type badRequest struct{ err error }
 
-func (b badRequest) Error() string { return b.err.Error() }
-func (b badRequest) Unwrap() error { return b.err }
+func (bad badRequest) Error() string { return bad.err.Error() }
+func (bad badRequest) Unwrap() error { return bad.err }
 
 func errBadRequest(err error) error { return badRequest{err} }
 
@@ -84,22 +84,22 @@ func problemFor(err error) Problem {
 			Detail: err.Error(),
 		}
 	}
-	for _, m := range errorMap {
-		if errors.Is(err, m.err) {
-			p := Problem{
-				Type:   problemBaseURI + m.slug,
-				Title:  m.title,
-				Status: m.status,
+	for _, mapping := range errorMap {
+		if errors.Is(err, mapping.err) {
+			problem := Problem{
+				Type:   problemBaseURI + mapping.slug,
+				Title:  mapping.title,
+				Status: mapping.status,
 			}
 			// Detail describes what the caller did wrong, so it belongs on a
 			// 4xx. At 5xx the cause is ours and the wrapped message can carry
 			// internals -- a sequence number, a constraint name, a driver
 			// error. The client still gets Type, which is all it needs to
 			// decide whether to retry; the cause goes to the log instead.
-			if m.status < 500 {
-				p.Detail = err.Error()
+			if mapping.status < 500 {
+				problem.Detail = err.Error()
 			}
-			return p
+			return problem
 		}
 	}
 	return Problem{
@@ -110,30 +110,30 @@ func problemFor(err error) Problem {
 }
 
 func (s *Server) writeProblem(w http.ResponseWriter, r *http.Request, err error) {
-	p := problemFor(err)
-	p.Instance = r.URL.Path
+	problem := problemFor(err)
+	problem.Instance = r.URL.Path
 
-	if p.Status >= 500 {
+	if problem.Status >= 500 {
 		// Server-side failures carry no detail to the client -- it could leak
 		// internals -- so the log is the only place the cause survives.
 		s.log.ErrorContext(r.Context(), "request failed",
 			slog.String("path", r.URL.Path),
 			slog.String("method", r.Method),
-			slog.Int("status", p.Status),
+			slog.Int("status", problem.Status),
 			slog.Any("error", err))
 	}
 
 	w.Header().Set("Content-Type", "application/problem+json")
-	w.WriteHeader(p.Status)
-	if err := json.NewEncoder(w).Encode(p); err != nil {
+	w.WriteHeader(problem.Status)
+	if err := json.NewEncoder(w).Encode(problem); err != nil {
 		s.log.ErrorContext(r.Context(), "writing problem response", slog.Any("error", err))
 	}
 }
 
-func (s *Server) writeJSON(w http.ResponseWriter, r *http.Request, status int, v any) {
+func (s *Server) writeJSON(w http.ResponseWriter, r *http.Request, status int, body any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	if err := json.NewEncoder(w).Encode(v); err != nil {
+	if err := json.NewEncoder(w).Encode(body); err != nil {
 		s.log.ErrorContext(r.Context(), "writing response", slog.Any("error", err))
 	}
 }

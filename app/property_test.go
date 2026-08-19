@@ -29,7 +29,7 @@ var propAccounts = []domain.AccountName{
 func propLedger(t *rapid.T) (*app.Ledger, context.Context) {
 	ctx := context.Background()
 	store := memstore.New()
-	l, err := app.Open(store, "prop",
+	ledger, err := app.Open(store, "prop",
 		app.WithClock(func() time.Time { return base }),
 		app.WithBackdateLimit(90*24*time.Hour),
 	)
@@ -41,7 +41,7 @@ func propLedger(t *rapid.T) (*app.Ledger, context.Context) {
 	// their lifetime and exercises backdating rather than the check that an
 	// entry may not predate the account it touches.
 	open := func(name domain.AccountName, allowNegative bool) {
-		if _, _, err := l.OpenAccount(ctx, app.OpenAccountCommand{
+		if _, _, err := ledger.OpenAccount(ctx, app.OpenAccountCommand{
 			Name: name, Currency: brl, Normal: domain.Credit, AllowNegative: allowNegative,
 			EffectiveAt: base.Add(-60 * 24 * time.Hour),
 		}); err != nil {
@@ -53,20 +53,20 @@ func propLedger(t *rapid.T) (*app.Ledger, context.Context) {
 		open(name, false)
 	}
 	for _, name := range propAccounts[:2] {
-		if _, err := l.Commit(ctx, app.CommitCommand{Postings: []domain.Posting{
+		if _, err := ledger.Commit(ctx, app.CommitCommand{Postings: []domain.Posting{
 			domain.Dr("liabilities:clearing", domain.FromMinor(brl, 1000)),
 			domain.Cr(name, domain.FromMinor(brl, 1000)),
 		}}); err != nil {
 			t.Fatalf("funding %q: %v", name, err)
 		}
 	}
-	return l, ctx
+	return ledger, ctx
 }
 
 // A command either takes effect completely or leaves no trace, so a failure is
 // never allowed to move the stream.
-func mustNotWrite(t *rapid.T, l *app.Ledger, ctx context.Context, before domain.Head, err error) {
-	after, headErr := l.Head(ctx)
+func mustNotWrite(t *rapid.T, ledger *app.Ledger, ctx context.Context, before domain.Head, err error) {
+	after, headErr := ledger.Head(ctx)
 	if headErr != nil {
 		t.Fatalf("Head: %v", headErr)
 	}
@@ -78,13 +78,13 @@ func mustNotWrite(t *rapid.T, l *app.Ledger, ctx context.Context, before domain.
 
 func TestPropertyLedgerInvariants(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
-		l, ctx := propLedger(t)
+		ledger, ctx := propLedger(t)
 
 		var committed []domain.ID
 		keys := []string{"", "k1", "k2"}
 
 		for range rapid.IntRange(1, 12).Draw(t, "commands") {
-			before, err := l.Head(ctx)
+			before, err := ledger.Head(ctx)
 			if err != nil {
 				t.Fatalf("Head: %v", err)
 			}
@@ -103,7 +103,7 @@ func TestPropertyLedgerInvariants(t *testing.T) {
 					effective = base.Add(-time.Duration(rapid.IntRange(0, 48).Draw(t, "hours")) * time.Hour)
 				}
 
-				res, err := l.Commit(ctx, app.CommitCommand{
+				res, err := ledger.Commit(ctx, app.CommitCommand{
 					EffectiveAt:    effective,
 					IdempotencyKey: rapid.SampledFrom(keys).Draw(t, "key"),
 					Postings: []domain.Posting{
@@ -116,13 +116,13 @@ func TestPropertyLedgerInvariants(t *testing.T) {
 					if res.Replayed {
 						// A replay answers with the original outcome and must
 						// not have written anything of its own.
-						mustNotWrite(t, l, ctx, before, nil)
+						mustNotWrite(t, ledger, ctx, before, nil)
 					} else {
 						committed = append(committed, res.TransactionID)
 					}
 				case errors.Is(err, domain.ErrInsufficientFunds),
 					errors.Is(err, domain.ErrIdempotencyConflict):
-					mustNotWrite(t, l, ctx, before, err)
+					mustNotWrite(t, ledger, ctx, before, err)
 				default:
 					t.Fatalf("Commit: %v", err)
 				}
@@ -132,7 +132,7 @@ func TestPropertyLedgerInvariants(t *testing.T) {
 					continue
 				}
 				id := rapid.SampledFrom(committed).Draw(t, "transaction")
-				res, err := l.Revert(ctx, app.RevertCommand{TransactionID: id})
+				res, err := ledger.Revert(ctx, app.RevertCommand{TransactionID: id})
 				switch {
 				case err == nil:
 					if !res.Replayed {
@@ -140,30 +140,30 @@ func TestPropertyLedgerInvariants(t *testing.T) {
 					}
 				case errors.Is(err, domain.ErrAlreadyReverted),
 					errors.Is(err, domain.ErrInsufficientFunds):
-					mustNotWrite(t, l, ctx, before, err)
+					mustNotWrite(t, ledger, ctx, before, err)
 				default:
 					t.Fatalf("Revert: %v", err)
 				}
 			}
 		}
 
-		checkConserved(t, l, ctx)
-		checkNoUnpermittedOverdraft(t, l, ctx)
-		checkChain(t, l, ctx)
-		checkEveryPrefixBalances(t, l, ctx)
+		checkConserved(t, ledger, ctx)
+		checkNoUnpermittedOverdraft(t, ledger, ctx)
+		checkChain(t, ledger, ctx)
+		checkEveryPrefixBalances(t, ledger, ctx)
 	})
 }
 
 // Double entry means the book sums to zero in every currency, whatever was
 // done to it. If this ever fails, money was created or destroyed.
-func checkConserved(t *rapid.T, l *app.Ledger, ctx context.Context) {
-	accounts, err := l.Accounts(ctx, "")
+func checkConserved(t *rapid.T, ledger *app.Ledger, ctx context.Context) {
+	accounts, err := ledger.Accounts(ctx, "")
 	if err != nil {
 		t.Fatalf("Accounts: %v", err)
 	}
 	var total int64
 	for _, acct := range accounts {
-		amt, err := l.Balance(ctx, domain.BalanceQuery{Account: acct.Name})
+		amt, err := ledger.Balance(ctx, domain.BalanceQuery{Account: acct.Name})
 		if err != nil {
 			t.Fatalf("Balance(%q): %v", acct.Name, err)
 		}
@@ -176,8 +176,8 @@ func checkConserved(t *rapid.T, l *app.Ledger, ctx context.Context) {
 
 // An account that was opened without permission to go past zero must not have
 // been pushed past it, no matter what order the commands arrived in.
-func checkNoUnpermittedOverdraft(t *rapid.T, l *app.Ledger, ctx context.Context) {
-	accounts, err := l.Accounts(ctx, "")
+func checkNoUnpermittedOverdraft(t *rapid.T, ledger *app.Ledger, ctx context.Context) {
+	accounts, err := ledger.Accounts(ctx, "")
 	if err != nil {
 		t.Fatalf("Accounts: %v", err)
 	}
@@ -185,7 +185,7 @@ func checkNoUnpermittedOverdraft(t *rapid.T, l *app.Ledger, ctx context.Context)
 		if acct.AllowNegative {
 			continue
 		}
-		amt, err := l.PresentedBalance(ctx, domain.BalanceQuery{Account: acct.Name})
+		amt, err := ledger.PresentedBalance(ctx, domain.BalanceQuery{Account: acct.Name})
 		if err != nil {
 			t.Fatalf("PresentedBalance(%q): %v", acct.Name, err)
 		}
@@ -195,12 +195,12 @@ func checkNoUnpermittedOverdraft(t *rapid.T, l *app.Ledger, ctx context.Context)
 	}
 }
 
-func checkChain(t *rapid.T, l *app.Ledger, ctx context.Context) {
-	verified, err := l.Verify(ctx)
+func checkChain(t *rapid.T, ledger *app.Ledger, ctx context.Context) {
+	verified, err := ledger.Verify(ctx)
 	if err != nil {
 		t.Fatalf("Verify: %v", err)
 	}
-	head, err := l.Head(ctx)
+	head, err := ledger.Head(ctx)
 	if err != nil {
 		t.Fatalf("Head: %v", err)
 	}
@@ -215,29 +215,29 @@ func checkChain(t *rapid.T, l *app.Ledger, ctx context.Context) {
 // the whole book rather than an empty one. This is
 // the bitemporal claim -- "what did we believe, back then" -- reduced to
 // arithmetic, and it is what a single-timestamp ledger cannot answer.
-func checkEveryPrefixBalances(t *rapid.T, l *app.Ledger, ctx context.Context) {
-	head, err := l.Head(ctx)
+func checkEveryPrefixBalances(t *rapid.T, ledger *app.Ledger, ctx context.Context) {
+	head, err := ledger.Head(ctx)
 	if err != nil {
 		t.Fatalf("Head: %v", err)
 	}
-	accounts, err := l.Accounts(ctx, "")
+	accounts, err := ledger.Accounts(ctx, "")
 	if err != nil {
 		t.Fatalf("Accounts: %v", err)
 	}
 
 	for _, acct := range accounts {
-		entries, err := l.Entries(ctx, domain.EntryQuery{Account: acct.Name})
+		entries, err := ledger.Entries(ctx, domain.EntryQuery{Account: acct.Name})
 		if err != nil {
 			t.Fatalf("Entries(%q): %v", acct.Name, err)
 		}
 		for seq := int64(1); seq <= head.Seq; seq++ {
 			var want int64
-			for _, e := range entries {
-				if e.Seq <= seq {
-					want += e.Amount.Minor()
+			for _, entry := range entries {
+				if entry.Seq <= seq {
+					want += entry.Amount.Minor()
 				}
 			}
-			got, err := l.Balance(ctx, domain.BalanceQuery{Account: acct.Name, AsOfSeq: seq})
+			got, err := ledger.Balance(ctx, domain.BalanceQuery{Account: acct.Name, AsOfSeq: seq})
 			if err != nil {
 				t.Fatalf("Balance(%q, as of %d): %v", acct.Name, seq, err)
 			}

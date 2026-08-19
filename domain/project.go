@@ -19,63 +19,63 @@ type Projection struct {
 
 // Project derives the read-model changes an event produces. The event must
 // already be sealed, since entries carry its sequence number.
-func Project(e Event) (Projection, error) {
-	if e.Seq <= 0 {
-		return Projection{}, fmt.Errorf("%w: event %s has no sequence number", ErrUnknownEvent, e.ID)
+func Project(event Event) (Projection, error) {
+	if event.Seq <= 0 {
+		return Projection{}, fmt.Errorf("%w: event %s has no sequence number", ErrUnknownEvent, event.ID)
 	}
-	payload, err := e.DecodePayload()
+	payload, err := event.DecodePayload()
 	if err != nil {
 		return Projection{}, err
 	}
 
-	switch p := payload.(type) {
+	switch decoded := payload.(type) {
 	case AccountOpened:
-		acct, err := p.Account()
+		acct, err := decoded.Account()
 		if err != nil {
 			return Projection{}, err
 		}
-		acct.OpenedSeq = e.Seq
+		acct.OpenedSeq = event.Seq
 		return Projection{Account: &acct}, nil
 
 	case TransactionCommitted:
-		tx, err := p.Transaction()
+		tx, err := decoded.Transaction()
 		if err != nil {
 			return Projection{}, err
 		}
-		return projectTransaction(e, tx, ID{}), nil
+		return projectTransaction(event, tx, ID{}), nil
 
 	case TransactionReverted:
-		tx, err := p.Transaction()
+		tx, err := decoded.Transaction()
 		if err != nil {
 			return Projection{}, err
 		}
-		return projectTransaction(e, tx, p.RevertsID), nil
+		return projectTransaction(event, tx, decoded.RevertsID), nil
 
 	default:
-		return Projection{}, fmt.Errorf("%w: no projection for %q", ErrUnknownEvent, e.Type)
+		return Projection{}, fmt.Errorf("%w: no projection for %q", ErrUnknownEvent, event.Type)
 	}
 }
 
-func projectTransaction(e Event, tx Transaction, reverts ID) Projection {
+func projectTransaction(event Event, tx Transaction, reverts ID) Projection {
 	entries := make([]Entry, len(tx.Postings))
-	for i, p := range tx.Postings {
+	for i, posting := range tx.Postings {
 		entries[i] = Entry{
-			Seq:         e.Seq,
+			Seq:         event.Seq,
 			Index:       i,
-			Account:     p.Account,
-			Amount:      p.Amount,
+			Account:     posting.Account,
+			Amount:      posting.Amount,
 			TxID:        tx.ID,
 			Reference:   tx.Reference,
 			EffectiveAt: tx.EffectiveAt,
-			RecordedAt:  e.RecordedAt,
+			RecordedAt:  event.RecordedAt,
 			Reverts:     reverts,
 		}
 	}
 	return Projection{
 		Transaction: &RecordedTransaction{
 			Transaction: tx,
-			Seq:         e.Seq,
-			RecordedAt:  e.RecordedAt,
+			Seq:         event.Seq,
+			RecordedAt:  event.RecordedAt,
 			Reverts:     reverts,
 		},
 		Entries: entries,

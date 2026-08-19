@@ -54,7 +54,7 @@ func run() error {
 	}
 	defer store.Close()
 
-	l, err := app.Open(store, *ledgerID,
+	ledger, err := app.Open(store, *ledgerID,
 		app.WithBackdateLimit(*backdate),
 		app.WithFutureLimit(*future),
 	)
@@ -64,7 +64,7 @@ func run() error {
 
 	srv := &http.Server{
 		Addr:              *addr,
-		Handler:           httpapi.New(l, log),
+		Handler:           httpapi.New(ledger, log),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      30 * time.Second,
@@ -94,7 +94,7 @@ func run() error {
 
 func openStore(ctx context.Context, dsn string, migrate bool, log *slog.Logger) (app.Store, error) {
 	if dsn == "" {
-		log.Warn("no -dsn given; running in memory, nothing will be persisted")
+		log.Warn("no -dsn given. The ledger runs in memory. Nothing is saved.")
 		return memstore.New(), nil
 	}
 	store, err := pgstore.Open(ctx, dsn)
@@ -112,8 +112,8 @@ func openStore(ctx context.Context, dsn string, migrate bool, log *slog.Logger) 
 }
 
 func envOr(key, fallback string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
+	if value := os.Getenv(key); value != "" {
+		return value
 	}
 	return fallback
 }

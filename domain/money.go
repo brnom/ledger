@@ -66,7 +66,7 @@ func CurrencyByCode(code string) (Currency, bool) {
 func MustCurrency(code string) Currency {
 	scale, ok := knownCurrencies[code]
 	if !ok {
-		panic(fmt.Sprintf("ledger: unknown currency %q; use NewCurrency", code))
+		panic(fmt.Sprintf("ledger: unknown currency %q. Use NewCurrency.", code))
 	}
 	return Currency{Code: code, Scale: scale}
 }
@@ -75,7 +75,7 @@ func MustCurrency(code string) Currency {
 // characters of A-Z and 0-9, which covers ISO 4217 as well as the ticker-style
 // codes used for crypto assets.
 func (c Currency) Validate() error {
-	if n := len(c.Code); n < 2 || n > 12 {
+	if size := len(c.Code); size < 2 || size > 12 {
 		return fmt.Errorf("%w: code %q must be 2-12 characters", ErrInvalidCurrency, c.Code)
 	}
 	for _, r := range c.Code {
@@ -112,9 +112,9 @@ type Amount struct {
 	cur   Currency
 }
 
-// FromMinor returns an Amount of n minor units of cur.
-func FromMinor(cur Currency, n int64) Amount {
-	return Amount{minor: n, cur: cur}
+// FromMinor returns an Amount of the given number of minor units of cur.
+func FromMinor(cur Currency, minor int64) Amount {
+	return Amount{minor: minor, cur: cur}
 }
 
 // Zero returns the zero value of cur.
@@ -184,11 +184,11 @@ func (a Amount) Abs() (Amount, error) {
 	return a.Neg()
 }
 
-// MulInt returns a*n.
-func (a Amount) MulInt(n int64) (Amount, error) {
-	prod := a.minor * n
-	if a.minor != 0 && (prod/a.minor != n || (a.minor == -1 && n == math.MinInt64)) {
-		return Amount{}, fmt.Errorf("%w: %s * %d", ErrOverflow, a, n)
+// MulInt returns a multiplied by factor.
+func (a Amount) MulInt(factor int64) (Amount, error) {
+	prod := a.minor * factor
+	if a.minor != 0 && (prod/a.minor != factor || (a.minor == -1 && factor == math.MinInt64)) {
+		return Amount{}, fmt.Errorf("%w: %s * %d", ErrOverflow, a, factor)
 	}
 	return Amount{minor: prod, cur: a.cur}, nil
 }
@@ -225,11 +225,11 @@ func (a Amount) Allocate(ratios []int64) ([]Amount, error) {
 		return nil, fmt.Errorf("%w: no ratios given", ErrInvalidAmount)
 	}
 	total := new(big.Int)
-	for i, r := range ratios {
-		if r < 0 {
+	for i, ratio := range ratios {
+		if ratio < 0 {
 			return nil, fmt.Errorf("%w: ratio %d is negative", ErrInvalidAmount, i)
 		}
-		total.Add(total, big.NewInt(r))
+		total.Add(total, big.NewInt(ratio))
 	}
 	if total.Sign() == 0 {
 		return nil, fmt.Errorf("%w: ratios sum to zero", ErrInvalidAmount)
@@ -249,9 +249,9 @@ func (a Amount) Allocate(ratios []int64) ([]Amount, error) {
 	parts := make([]part, len(ratios))
 	assigned := new(big.Int)
 
-	for i, r := range ratios {
+	for i, ratio := range ratios {
 		share, rem := new(big.Int), new(big.Int)
-		share.Mul(mag, big.NewInt(r))
+		share.Mul(mag, big.NewInt(ratio))
 		share.QuoRem(share, total, rem)
 		assigned.Add(assigned, share)
 		out[i] = Amount{minor: share.Int64(), cur: a.cur}
@@ -262,8 +262,8 @@ func (a Amount) Allocate(ratios []int64) ([]Amount, error) {
 	// index so the result is deterministic and replayable.
 	leftover := new(big.Int).Sub(mag, assigned).Int64()
 	sort.SliceStable(parts, func(i, j int) bool {
-		if c := parts[i].remainder.Cmp(parts[j].remainder); c != 0 {
-			return c > 0
+		if cmp := parts[i].remainder.Cmp(parts[j].remainder); cmp != 0 {
+			return cmp > 0
 		}
 		return parts[i].idx < parts[j].idx
 	})
@@ -283,25 +283,25 @@ func (a Amount) Allocate(ratios []int64) ([]Amount, error) {
 // [Currency.Scale] fraction digits and no currency code: "-1234.05". It is the
 // inverse of [ParseAmount] and the form used in canonical event encoding.
 func (a Amount) Format() string {
-	var u uint64
+	var magnitude uint64
 	if a.minor < 0 {
 		// Negate in unsigned space so math.MinInt64 does not overflow.
-		u = uint64(-(a.minor + 1)) + 1
+		magnitude = uint64(-(a.minor + 1)) + 1
 	} else {
-		u = uint64(a.minor)
+		magnitude = uint64(a.minor)
 	}
 
-	d := strconv.FormatUint(u, 10)
-	if sc := int(a.cur.Scale); sc > 0 {
-		if len(d) <= sc {
-			d = strings.Repeat("0", sc-len(d)+1) + d
+	digits := strconv.FormatUint(magnitude, 10)
+	if scale := int(a.cur.Scale); scale > 0 {
+		if len(digits) <= scale {
+			digits = strings.Repeat("0", scale-len(digits)+1) + digits
 		}
-		d = d[:len(d)-sc] + "." + d[len(d)-sc:]
+		digits = digits[:len(digits)-scale] + "." + digits[len(digits)-scale:]
 	}
 	if a.minor < 0 {
-		d = "-" + d
+		digits = "-" + digits
 	}
-	return d
+	return digits
 }
 
 // String returns the value with its currency code: "-1234.05 BRL".
@@ -314,12 +314,12 @@ func (a Amount) String() string { return a.Format() + " " + a.cur.Code }
 // More fraction digits than the currency has is an error, not a rounding
 // opportunity: silently dropping a digit is how money goes missing, so the
 // caller has to decide how to round.
-func ParseAmount(cur Currency, s string) (Amount, error) {
+func ParseAmount(cur Currency, text string) (Amount, error) {
 	if err := cur.Validate(); err != nil {
 		return Amount{}, err
 	}
 
-	rest := s
+	rest := text
 	neg := false
 	if rest != "" && (rest[0] == '-' || rest[0] == '+') {
 		neg = rest[0] == '-'
@@ -329,43 +329,43 @@ func ParseAmount(cur Currency, s string) (Amount, error) {
 	intPart, fracPart, hasPoint := strings.Cut(rest, ".")
 	switch {
 	case intPart == "":
-		return Amount{}, fmt.Errorf("%w: %q has no integer digits", ErrInvalidAmount, s)
+		return Amount{}, fmt.Errorf("%w: %q has no integer digits", ErrInvalidAmount, text)
 	case hasPoint && fracPart == "":
-		return Amount{}, fmt.Errorf("%w: %q has a point but no fraction digits", ErrInvalidAmount, s)
+		return Amount{}, fmt.Errorf("%w: %q has a point but no fraction digits", ErrInvalidAmount, text)
 	case len(fracPart) > int(cur.Scale):
 		return Amount{}, fmt.Errorf("%w: %q has %d fraction digits, %s allows %d",
-			ErrInvalidAmount, s, len(fracPart), cur.Code, cur.Scale)
+			ErrInvalidAmount, text, len(fracPart), cur.Code, cur.Scale)
 	}
 	if !isDigits(intPart) || !isDigits(fracPart) {
-		return Amount{}, fmt.Errorf("%w: %q is not a decimal number", ErrInvalidAmount, s)
+		return Amount{}, fmt.Errorf("%w: %q is not a decimal number", ErrInvalidAmount, text)
 	}
 
 	digits := intPart + fracPart + strings.Repeat("0", int(cur.Scale)-len(fracPart))
-	u, err := strconv.ParseUint(strings.TrimLeft(digits, "0"), 10, 64)
+	magnitude, err := strconv.ParseUint(strings.TrimLeft(digits, "0"), 10, 64)
 	if err != nil && strings.TrimLeft(digits, "0") != "" {
-		return Amount{}, fmt.Errorf("%w: %q does not fit in %s", ErrOverflow, s, cur.Code)
+		return Amount{}, fmt.Errorf("%w: %q does not fit in %s", ErrOverflow, text, cur.Code)
 	}
 
 	if neg {
 		// -math.MinInt64 has no positive counterpart, so admit its magnitude
 		// as the one unsigned value above MaxInt64 that is representable.
-		if u > uint64(math.MaxInt64)+1 {
-			return Amount{}, fmt.Errorf("%w: %q does not fit in %s", ErrOverflow, s, cur.Code)
+		if magnitude > uint64(math.MaxInt64)+1 {
+			return Amount{}, fmt.Errorf("%w: %q does not fit in %s", ErrOverflow, text, cur.Code)
 		}
-		if u == uint64(math.MaxInt64)+1 {
+		if magnitude == uint64(math.MaxInt64)+1 {
 			return Amount{minor: math.MinInt64, cur: cur}, nil
 		}
-		return Amount{minor: -int64(u), cur: cur}, nil
+		return Amount{minor: -int64(magnitude), cur: cur}, nil
 	}
-	if u > uint64(math.MaxInt64) {
-		return Amount{}, fmt.Errorf("%w: %q does not fit in %s", ErrOverflow, s, cur.Code)
+	if magnitude > uint64(math.MaxInt64) {
+		return Amount{}, fmt.Errorf("%w: %q does not fit in %s", ErrOverflow, text, cur.Code)
 	}
-	return Amount{minor: int64(u), cur: cur}, nil
+	return Amount{minor: int64(magnitude), cur: cur}, nil
 }
 
-func isDigits(s string) bool {
-	for i := 0; i < len(s); i++ {
-		if s[i] < '0' || s[i] > '9' {
+func isDigits(text string) bool {
+	for i := 0; i < len(text); i++ {
+		if text[i] < '0' || text[i] > '9' {
 			return false
 		}
 	}

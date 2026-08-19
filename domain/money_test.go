@@ -10,11 +10,11 @@ import (
 // any scale without tripping the registry's consistency check.
 func testCur(t *testing.T, scale uint8) Currency {
 	t.Helper()
-	c, err := NewCurrency("XTS", scale)
+	cur, err := NewCurrency("XTS", scale)
 	if err != nil {
 		t.Fatalf("NewCurrency(XTS, %d): %v", scale, err)
 	}
-	return c
+	return cur
 }
 
 func TestCurrencyValidate(t *testing.T) {
@@ -291,7 +291,7 @@ func TestAllocate(t *testing.T) {
 }
 
 func TestAllocateInvalid(t *testing.T) {
-	a := FromMinor(MustCurrency("BRL"), 100)
+	amount := FromMinor(MustCurrency("BRL"), 100)
 	for _, tt := range []struct {
 		name   string
 		ratios []int64
@@ -302,7 +302,7 @@ func TestAllocateInvalid(t *testing.T) {
 		{"all zero", []int64{0, 0}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			if _, err := a.Allocate(tt.ratios); !errors.Is(err, ErrInvalidAmount) {
+			if _, err := amount.Allocate(tt.ratios); !errors.Is(err, ErrInvalidAmount) {
 				t.Errorf("err = %v, want ErrInvalidAmount", err)
 			}
 		})
@@ -375,8 +375,8 @@ func FuzzAllocateConservesTotal(f *testing.F) {
 		// The invariant that makes Allocate safe for payment splits: the parts
 		// reconstruct the original exactly, with no unit created or lost.
 		sum := Zero(cur)
-		for _, p := range parts {
-			sum, err = sum.Add(p)
+		for _, part := range parts {
+			sum, err = sum.Add(part)
 			if err != nil {
 				t.Fatalf("summing parts of %d overflowed: %v", minor, err)
 			}

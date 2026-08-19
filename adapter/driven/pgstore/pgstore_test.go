@@ -36,20 +36,20 @@ func sharedPool(t *testing.T) *pgxpool.Pool {
 	}
 	once.Do(func() {
 		ctx := context.Background()
-		p, err := pgxpool.New(ctx, dsn)
+		opened, err := pgxpool.New(ctx, dsn)
 		if err != nil {
 			fail = err
 			return
 		}
-		if err := p.Ping(ctx); err != nil {
+		if err := opened.Ping(ctx); err != nil {
 			fail = err
 			return
 		}
-		if err := pgstore.New(p).Migrate(ctx); err != nil {
+		if err := pgstore.New(opened).Migrate(ctx); err != nil {
 			fail = err
 			return
 		}
-		pool = p
+		pool = opened
 	})
 	if fail != nil {
 		t.Fatalf("connecting to PostgreSQL: %v", fail)
@@ -81,14 +81,14 @@ func TestMigrateIsIdempotent(t *testing.T) {
 func TestPayloadSurvivesRoundTrip(t *testing.T) {
 	store := pgstore.New(sharedPool(t))
 	ctx := context.Background()
-	l, err := app.Open(store, "payload-roundtrip-"+domain.NewID().String())
+	ledger, err := app.Open(store, "payload-roundtrip-"+domain.NewID().String())
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 
 	brl := domain.MustCurrency("BRL")
 	for _, name := range []domain.AccountName{"equity:opening-balances", "liabilities:users:1"} {
-		if _, _, err := l.OpenAccount(ctx, app.OpenAccountCommand{
+		if _, _, err := ledger.OpenAccount(ctx, app.OpenAccountCommand{
 			Name: name, Currency: brl, Normal: domain.Credit,
 			AllowNegative: name == "equity:opening-balances",
 			// Keys that would be reordered by jsonb, and a value with
@@ -100,7 +100,7 @@ func TestPayloadSurvivesRoundTrip(t *testing.T) {
 			t.Fatalf("OpenAccount(%q): %v", name, err)
 		}
 	}
-	if _, err := l.Commit(ctx, app.CommitCommand{
+	if _, err := ledger.Commit(ctx, app.CommitCommand{
 		Reference: "ação-123",
 		Metadata:  map[string]string{"zzz": "1", "aaa": "2"},
 		Postings: []domain.Posting{
@@ -111,23 +111,23 @@ func TestPayloadSurvivesRoundTrip(t *testing.T) {
 		t.Fatalf("Commit: %v", err)
 	}
 
-	events, err := l.Events(ctx, 1, 100)
+	events, err := ledger.Events(ctx, 1, 100)
 	if err != nil {
 		t.Fatalf("Events: %v", err)
 	}
 	if len(events) != 3 {
 		t.Fatalf("read %d events, want 3", len(events))
 	}
-	for _, e := range events {
-		if err := e.Verify(); err != nil {
-			t.Errorf("event %d: %v", e.Seq, err)
+	for _, event := range events {
+		if err := event.Verify(); err != nil {
+			t.Errorf("event %d: %v", event.Seq, err)
 		}
 		// Re-encoding the decoded payload must reproduce the stored bytes.
-		if _, err := domain.Project(e); err != nil {
-			t.Errorf("Project(%d): %v", e.Seq, err)
+		if _, err := domain.Project(event); err != nil {
+			t.Errorf("Project(%d): %v", event.Seq, err)
 		}
 	}
-	if _, err := l.Verify(ctx); err != nil {
+	if _, err := ledger.Verify(ctx); err != nil {
 		t.Errorf("Verify: %v", err)
 	}
 }
