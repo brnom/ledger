@@ -1,0 +1,533 @@
+package domain
+
+import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/binary"
+	"encoding/json"
+	"fmt"
+	"sort"
+	"strings"
+	"time"
+)
+
+// EventType names a kind of fact the ledger records. Types are strings on the
+// wire and in storage so that a reader written today can skip an event kind
+// added tomorrow instead of failing to parse the stream.
+type EventType string
+
+// The event types the ledger records.
+const (
+	EventAccountOpened        EventType = "account.opened"
+	EventTransactionCommitted EventType = "transaction.committed"
+	EventTransactionReverted  EventType = "transaction.reverted"
+)
+
+// MaxIdempotencyKeyLen bounds a caller-supplied idempotency key.
+const MaxIdempotencyKeyLen = 255
+
+// hashDomain separates this ledger's hashes from any other use of SHA-256,
+// and pins the hashing scheme to a version. Changing how events are hashed
+// means changing this string, which makes the break explicit rather than
+// silently invalidating every chain in storage.
+const hashDomain = "ledger.event.v1"
+
+// Payload is the typed body of an event.
+type Payload interface {
+	// EventType reports which event this payload belongs to.
+	EventType() EventType
+	// Validate reports whether the payload is internally consistent.
+	Validate() error
+}
+
+// PostingWire is a posting in its stored form. Amounts travel as decimal
+// strings with their currency and scale alongside: a JSON number would invite
+// a float somewhere down the line, and a bare minor-unit integer would be
+// meaningless if the currency's scale were ever misread.
+type PostingWire struct {
+	Account  AccountName `json:"account"`
+	Amount   string      `json:"amount"`
+	Currency string      `json:"currency"`
+	Scale    uint8       `json:"scale"`
+}
+
+// AccountOpened records an account entering the book.
+type AccountOpened struct {
+	Name          AccountName       `json:"name"`
+	Currency      string            `json:"currency"`
+	Scale         uint8             `json:"scale"`
+	Normal        string            `json:"normal"`
+	AllowNegative bool              `json:"allow_negative"`
+	OpenedAt      time.Time         `json:"opened_at"`
+	Metadata      map[string]string `json:"metadata,omitempty"`
+}
+
+// EventType implements [Payload].
+func (AccountOpened) EventType() EventType { return EventAccountOpened }
+
+// Validate implements [Payload].
+func (p AccountOpened) Validate() error {
+	// Check the name before rebuilding the account so a bad name is reported
+	// as such rather than as whatever the reconstruction trips over first.
+	if err := p.Name.Validate(); err != nil {
+		return err
+	}
+	acct, err := p.Account()
+	if err != nil {
+		return err
+	}
+	return acct.Validate()
+}
+
+// Account rebuilds the domain account this payload describes.
+func (p AccountOpened) Account() (Account, error) {
+	cur, err := NewCurrency(p.Currency, p.Scale)
+	if err != nil {
+		return Account{}, err
+	}
+	normal, err := ParseNormal(p.Normal)
+	if err != nil {
+		return Account{}, err
+	}
+	return Account{
+		Name:          p.Name,
+		Currency:      cur,
+		Normal:        normal,
+		AllowNegative: p.AllowNegative,
+		Metadata:      p.Metadata,
+		OpenedAt:      NormalizeTime(p.OpenedAt),
+	}, nil
+}
+
+// NewAccountOpened builds the payload that opens acct.
+func NewAccountOpened(acct Account) (AccountOpened, error) {
+	if err := acct.Validate(); err != nil {
+		return AccountOpened{}, err
+	}
+	return AccountOpened{
+		Name:          acct.Name,
+		Currency:      acct.Currency.Code,
+		Scale:         acct.Currency.Scale,
+		Normal:        acct.Normal.String(),
+		AllowNegative: acct.AllowNegative,
+		OpenedAt:      NormalizeTime(acct.OpenedAt),
+		Metadata:      acct.Metadata,
+	}, nil
+}
+
+// TransactionCommitted records a balanced transaction landing in the book.
+type TransactionCommitted struct {
+	ID          ID                `json:"id"`
+	EffectiveAt time.Time         `json:"effective_at"`
+	Postings    []PostingWire     `json:"postings"`
+	Reference   string            `json:"reference,omitempty"`
+	Metadata    map[string]string `json:"metadata,omitempty"`
+}
+
+// EventType implements [Payload].
+func (TransactionCommitted) EventType() EventType { return EventTransactionCommitted }
+
+// Validate implements [Payload].
+func (p TransactionCommitted) Validate() error {
+	tx, err := p.Transaction()
+	if err != nil {
+		return err
+	}
+	return tx.Validate()
+}
+
+// Transaction rebuilds the domain transaction this payload describes.
+func (p TransactionCommitted) Transaction() (Transaction, error) {
+	postings, err := postingsFromWire(p.Postings)
+	if err != nil {
+		return Transaction{}, err
+	}
+	return Transaction{
+		ID:          p.ID,
+		EffectiveAt: NormalizeTime(p.EffectiveAt),
+		Postings:    postings,
+		Reference:   p.Reference,
+		Metadata:    p.Metadata,
+	}, nil
+}
+
+// NewTransactionCommitted builds the payload that commits tx.
+func NewTransactionCommitted(tx Transaction) (TransactionCommitted, error) {
+	if err := tx.Validate(); err != nil {
+		return TransactionCommitted{}, err
+	}
+	return TransactionCommitted{
+		ID:          tx.ID,
+		EffectiveAt: NormalizeTime(tx.EffectiveAt),
+		Postings:    postingsToWire(tx.Postings),
+		Reference:   tx.Reference,
+		Metadata:    tx.Metadata,
+	}, nil
+}
+
+// TransactionReverted records the compensating transaction that undoes an
+// earlier one. The original is never touched; this is a new transaction that
+// names what it cancels.
+type TransactionReverted struct {
+	ID          ID                `json:"id"`
+	RevertsID   ID                `json:"reverts_id"`
+	EffectiveAt time.Time         `json:"effective_at"`
+	Postings    []PostingWire     `json:"postings"`
+	Reason      string            `json:"reason,omitempty"`
+	Reference   string            `json:"reference,omitempty"`
+	Metadata    map[string]string `json:"metadata,omitempty"`
+}
+
+// EventType implements [Payload].
+func (TransactionReverted) EventType() EventType { return EventTransactionReverted }
+
+// Validate implements [Payload].
+func (p TransactionReverted) Validate() error {
+	if p.RevertsID.IsZero() {
+		return fmt.Errorf("%w: reversal %s names no original transaction", ErrInvalidTransaction, p.ID)
+	}
+	if p.ID == p.RevertsID {
+		return fmt.Errorf("%w: transaction %s reverts itself", ErrInvalidTransaction, p.ID)
+	}
+	tx, err := p.Transaction()
+	if err != nil {
+		return err
+	}
+	return tx.Validate()
+}
+
+// Transaction rebuilds the compensating transaction this payload describes.
+func (p TransactionReverted) Transaction() (Transaction, error) {
+	postings, err := postingsFromWire(p.Postings)
+	if err != nil {
+		return Transaction{}, err
+	}
+	return Transaction{
+		ID:          p.ID,
+		EffectiveAt: NormalizeTime(p.EffectiveAt),
+		Postings:    postings,
+		Reference:   p.Reference,
+		Metadata:    p.Metadata,
+	}, nil
+}
+
+// NewTransactionReverted builds the payload that reverts original.
+func NewTransactionReverted(original Transaction, id ID, effectiveAt time.Time, reason string) (TransactionReverted, error) {
+	rev := original.Reverse(id, effectiveAt)
+	if err := rev.Validate(); err != nil {
+		return TransactionReverted{}, err
+	}
+	return TransactionReverted{
+		ID:          rev.ID,
+		RevertsID:   original.ID,
+		EffectiveAt: NormalizeTime(rev.EffectiveAt),
+		Postings:    postingsToWire(rev.Postings),
+		Reason:      reason,
+		Reference:   rev.Reference,
+	}, nil
+}
+
+func postingsToWire(postings []Posting) []PostingWire {
+	out := make([]PostingWire, len(postings))
+	for i, p := range postings {
+		out[i] = PostingWire{
+			Account:  p.Account,
+			Amount:   p.Amount.Format(),
+			Currency: p.Amount.Currency().Code,
+			Scale:    p.Amount.Currency().Scale,
+		}
+	}
+	return out
+}
+
+func postingsFromWire(wire []PostingWire) ([]Posting, error) {
+	out := make([]Posting, len(wire))
+	for i, w := range wire {
+		cur, err := NewCurrency(w.Currency, w.Scale)
+		if err != nil {
+			return nil, fmt.Errorf("posting %d: %w", i, err)
+		}
+		amt, err := ParseAmount(cur, w.Amount)
+		if err != nil {
+			return nil, fmt.Errorf("posting %d: %w", i, err)
+		}
+		out[i] = Posting{Account: w.Account, Amount: amt}
+	}
+	return out, nil
+}
+
+// Event is one immutable fact in a ledger's stream, together with the chain
+// linkage that makes the stream tamper-evident.
+//
+// Events are appended and never modified. Seq is contiguous from 1 within a
+// ledger, and each event's PrevHash is the hash of the event before it, so
+// altering or removing any event breaks every hash that follows.
+type Event struct {
+	// Seq is the event's position in its ledger's stream, starting at 1 with
+	// no gaps. It doubles as the "recorded" axis of the ledger's bitemporal
+	// model: an event with a lower Seq was known earlier.
+	Seq int64
+
+	// ID identifies the event itself, distinct from any identifier inside the
+	// payload.
+	ID ID
+
+	// LedgerID names the stream. One ledger is one book with one chain.
+	LedgerID string
+
+	Type EventType
+
+	// Payload is the canonical JSON encoding of a [Payload]. It is stored and
+	// hashed byte for byte, so it must never be re-serialized in transit.
+	Payload []byte
+
+	// RecordedAt is when the ledger learned the fact. Business time lives in
+	// the payload instead, which is what lets a correction be recorded now and
+	// take effect in the past.
+	RecordedAt time.Time
+
+	// IdempotencyKey is the caller's key for the command that produced this
+	// event, empty if none was supplied.
+	IdempotencyKey string
+
+	PrevHash [32]byte
+	Hash     [32]byte
+}
+
+// GenesisHash is the PrevHash of the first event in a ledger.
+var GenesisHash = [32]byte{}
+
+// NewEvent builds an unsealed event carrying p. The returned event has no Seq
+// and no hashes; [Event.Seal] assigns those when the event is appended, since
+// its position in the stream is not known until then.
+func NewEvent(ledgerID string, p Payload, recordedAt time.Time, idempotencyKey string) (Event, error) {
+	if err := ValidateLedgerID(ledgerID); err != nil {
+		return Event{}, err
+	}
+	if len(idempotencyKey) > MaxIdempotencyKeyLen {
+		return Event{}, fmt.Errorf("%w: idempotency key is %d bytes, max %d",
+			ErrInvalidID, len(idempotencyKey), MaxIdempotencyKeyLen)
+	}
+	if err := p.Validate(); err != nil {
+		return Event{}, err
+	}
+	payload, err := canonicalJSON(p)
+	if err != nil {
+		return Event{}, err
+	}
+	return Event{
+		ID:             NewID(),
+		LedgerID:       ledgerID,
+		Type:           p.EventType(),
+		Payload:        payload,
+		RecordedAt:     NormalizeTime(recordedAt),
+		IdempotencyKey: idempotencyKey,
+	}, nil
+}
+
+// Seal fixes the event at position seq behind prev and computes its hash. It
+// is called once, by the store, inside the transaction that appends the event.
+func (e *Event) Seal(seq int64, prev [32]byte) {
+	e.Seq = seq
+	e.PrevHash = prev
+	e.Hash = e.computeHash()
+}
+
+// Verify recomputes the event's hash and reports whether it still matches.
+func (e Event) Verify() error {
+	if got := e.computeHash(); got != e.Hash {
+		return fmt.Errorf("%w: event %d (%s) hashes to %x, stored as %x",
+			ErrChainBroken, e.Seq, e.ID, got[:8], e.Hash[:8])
+	}
+	return nil
+}
+
+// computeHash digests the event's fields as length-prefixed chunks. The
+// prefixes make the encoding unambiguous: without them, two different events
+// could concatenate to the same bytes and collide.
+func (e Event) computeHash() [32]byte {
+	h := sha256.New()
+	writeChunk(h, []byte(hashDomain))
+	writeChunk(h, e.PrevHash[:])
+	var seq [8]byte
+	binary.BigEndian.PutUint64(seq[:], uint64(e.Seq))
+	writeChunk(h, seq[:])
+	writeChunk(h, e.ID[:])
+	writeChunk(h, []byte(e.LedgerID))
+	writeChunk(h, []byte(e.Type))
+	writeChunk(h, []byte(e.RecordedAt.Format(time.RFC3339Nano)))
+	writeChunk(h, []byte(e.IdempotencyKey))
+	writeChunk(h, e.Payload)
+	return [32]byte(h.Sum(nil))
+}
+
+func writeChunk(h interface{ Write([]byte) (int, error) }, b []byte) {
+	var n [8]byte
+	binary.BigEndian.PutUint64(n[:], uint64(len(b)))
+	h.Write(n[:])
+	h.Write(b)
+}
+
+// DecodePayload returns the typed payload carried by the event.
+func (e Event) DecodePayload() (Payload, error) {
+	var target Payload
+	switch e.Type {
+	case EventAccountOpened:
+		target = &AccountOpened{}
+	case EventTransactionCommitted:
+		target = &TransactionCommitted{}
+	case EventTransactionReverted:
+		target = &TransactionReverted{}
+	default:
+		return nil, fmt.Errorf("%w: event %d has unknown type %q", ErrUnknownEvent, e.Seq, e.Type)
+	}
+	dec := json.NewDecoder(bytes.NewReader(e.Payload))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(target); err != nil {
+		return nil, fmt.Errorf("%w: event %d: %v", ErrUnknownEvent, e.Seq, err)
+	}
+	// Return the value, not the pointer, so callers type-switch on the same
+	// types they constructed.
+	switch p := target.(type) {
+	case *AccountOpened:
+		return *p, nil
+	case *TransactionCommitted:
+		return *p, nil
+	case *TransactionReverted:
+		return *p, nil
+	default:
+		panic("unreachable")
+	}
+}
+
+// VerifyChain checks that events form an unbroken chain: contiguous sequence
+// numbers, each event linked to the one before it, and every hash matching its
+// contents. prev is the hash the chain is expected to start from, which is
+// [GenesisHash] for a whole stream or the hash of the last verified event when
+// checking a chunk at a time.
+func VerifyChain(events []Event, startSeq int64, prev [32]byte) ([32]byte, error) {
+	for i, e := range events {
+		switch {
+		case e.Seq != startSeq+int64(i):
+			return prev, fmt.Errorf("%w: expected event %d, found %d",
+				ErrChainBroken, startSeq+int64(i), e.Seq)
+		case e.PrevHash != prev:
+			return prev, fmt.Errorf("%w: event %d links to %x, expected %x",
+				ErrChainBroken, e.Seq, e.PrevHash[:8], prev[:8])
+		}
+		if err := e.Verify(); err != nil {
+			return prev, err
+		}
+		prev = e.Hash
+	}
+	return prev, nil
+}
+
+// MaxLedgerIDLen bounds a ledger identifier.
+const MaxLedgerIDLen = 128
+
+func ValidateLedgerID(id string) error {
+	if id == "" {
+		return fmt.Errorf("%w: ledger id is empty", ErrInvalidID)
+	}
+	if len(id) > MaxLedgerIDLen {
+		return fmt.Errorf("%w: ledger id is %d bytes, max %d", ErrInvalidID, len(id), MaxLedgerIDLen)
+	}
+	for _, r := range id {
+		ok := (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') ||
+			(r >= '0' && r <= '9') || r == '_' || r == '-'
+		if !ok {
+			return fmt.Errorf("%w: ledger id %q contains %q", ErrInvalidID, id, r)
+		}
+	}
+	return nil
+}
+
+// canonicalJSON encodes v in a form that is byte-identical for equal values:
+// object keys sorted, no insignificant whitespace, no floating-point numbers.
+//
+// The event hash covers these bytes, so the encoding has to be a function of
+// the value alone. Go's struct field order would already be stable, but a
+// canonical form also survives the payload being decoded and re-encoded by
+// another implementation -- which is exactly what an auditor verifying the
+// chain independently would do.
+func canonicalJSON(v any) ([]byte, error) {
+	raw, err := json.Marshal(v)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrEncoding, err)
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	var tree any
+	if err := dec.Decode(&tree); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrEncoding, err)
+	}
+	var buf bytes.Buffer
+	if err := writeCanonical(&buf, tree); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func writeCanonical(buf *bytes.Buffer, v any) error {
+	switch t := v.(type) {
+	case nil:
+		buf.WriteString("null")
+	case bool:
+		if t {
+			buf.WriteString("true")
+		} else {
+			buf.WriteString("false")
+		}
+	case json.Number:
+		// Floating-point has no place in a ledger, and its shortest
+		// representation is not stable enough to hash. Money is already
+		// encoded as a decimal string; anything else numeric is a count.
+		if strings.ContainsAny(t.String(), ".eE") {
+			return fmt.Errorf("%w: non-integer number %s in payload", ErrEncoding, t)
+		}
+		buf.WriteString(t.String())
+	case string:
+		// Delegate string escaping to encoding/json so the output stays valid
+		// JSON for every rune, including the ones that need \u escapes.
+		esc, err := json.Marshal(t)
+		if err != nil {
+			return fmt.Errorf("%w: %v", ErrEncoding, err)
+		}
+		buf.Write(esc)
+	case []any:
+		buf.WriteByte('[')
+		for i, item := range t {
+			if i > 0 {
+				buf.WriteByte(',')
+			}
+			if err := writeCanonical(buf, item); err != nil {
+				return err
+			}
+		}
+		buf.WriteByte(']')
+	case map[string]any:
+		keys := make([]string, 0, len(t))
+		for k := range t {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		buf.WriteByte('{')
+		for i, k := range keys {
+			if i > 0 {
+				buf.WriteByte(',')
+			}
+			if err := writeCanonical(buf, k); err != nil {
+				return err
+			}
+			buf.WriteByte(':')
+			if err := writeCanonical(buf, t[k]); err != nil {
+				return err
+			}
+		}
+		buf.WriteByte('}')
+	default:
+		return fmt.Errorf("%w: unsupported type %T in payload", ErrEncoding, v)
+	}
+	return nil
+}
