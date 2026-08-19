@@ -1,0 +1,95 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Build, vet, lint, test
+    runs-on: ubuntu-latest
+
+    # A real PostgreSQL, because the storage tests are the ones that catch
+    # what a fake cannot: whether an event's hash survives a round trip
+    # through the database, and whether the single-writer lock actually
+    # serializes concurrent writers.
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: ledger
+          POSTGRES_PASSWORD: ledger
+          POSTGRES_DB: ledger
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ledger"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 15
+
+    env:
+      LEDGER_TEST_POSTGRES_DSN: postgres://ledger:ledger@localhost:5432/ledger?sslmode=disable
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Verify formatting
+        run: make fmtcheck
+
+      - name: Verify module tidiness
+        run: |
+          go mod tidy
+          git diff --exit-code -- go.mod go.sum
+
+      - run: make vet
+
+      - run: make lint
+
+      - name: Test with race detector and coverage
+        run: make cover
+
+      - name: Property tests
+        run: make prop CHECKS=2000
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage
+          path: coverage.out
+
+  fuzz:
+    name: Fuzz smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # A short run on every PR catches regressions in the seed corpus; long
+      # campaigns belong in a scheduled job, not the PR path.
+      - name: Fuzz each target briefly
+        run: make fuzz FUZZTIME=20s
+
+      - name: Upload any crashers
+        uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: fuzz-crashers
+          path: testdata/fuzz/
