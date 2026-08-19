@@ -71,8 +71,8 @@ func TestCanonicalJSONIsDeterministic(t *testing.T) {
 	if err != nil {
 		t.Fatalf("canonicalJSON: %v", err)
 	}
-	// Go randomizes map iteration order, so repeating the encode is a real
-	// test that key ordering does not leak into the bytes we hash.
+	// Go randomizes map iteration order, so repeating the encode is a real test
+	// that key ordering does not leak into the bytes we hash.
 	for i := 0; i < 200; i++ {
 		again, err := canonicalJSON(opened)
 		if err != nil {
@@ -88,8 +88,8 @@ func TestCanonicalJSONIsDeterministic(t *testing.T) {
 }
 
 func TestCanonicalJSONRejectsFloats(t *testing.T) {
-	// A float would make the hash depend on formatting rather than value, and
-	// there is no legitimate reason for one to appear in a ledger payload.
+	// A float would make the hash depend on formatting rather than on value. No
+	// ledger payload has a legitimate reason to carry one.
 	if _, err := canonicalJSON(map[string]any{"rate": 1.5}); !errors.Is(err, ErrEncoding) {
 		t.Errorf("canonicalJSON(1.5) = %v, want ErrEncoding", err)
 	}
@@ -218,8 +218,8 @@ func TestVerifyChain(t *testing.T) {
 
 	t.Run("removed event breaks the link", func(t *testing.T) {
 		events := buildChain(t, 5)
-		// Renumber so the sequence looks contiguous; the chain still exposes
-		// the removal, which is the whole point of linking hashes.
+		// Renumber so the sequence looks contiguous. The chain still exposes the
+		// removal, which is the whole point of linking hashes.
 		spliced := append(events[:2:2], events[3:]...)
 		for i := range spliced {
 			spliced[i].Seq = int64(i + 1)
@@ -278,8 +278,8 @@ func TestDecodePayloadRoundTrip(t *testing.T) {
 			if got.EventType() != want.EventType() {
 				t.Fatalf("type = %q, want %q", got.EventType(), want.EventType())
 			}
-			// Re-encoding what we decoded must reproduce the stored bytes, or
-			// a replay would compute a different hash than the original.
+			// Re-encoding what we decoded must reproduce the stored bytes, or a replay
+			// would compute a different hash than the original.
 			again, err := canonicalJSON(got)
 			if err != nil {
 				t.Fatalf("canonicalJSON: %v", err)
@@ -359,8 +359,8 @@ func TestNewEventValidation(t *testing.T) {
 	}
 }
 
-// TestEventHashSurvivesTimeTruncation guards the reason timestamps are
-// normalized at ingress: an event hashed with nanosecond precision would stop
+// TestEventHashSurvivesTimeTruncation guards the reason the ledger normalizes
+// timestamps at ingress. An event hashed with nanosecond precision would stop
 // verifying once PostgreSQL handed it back with microsecond precision.
 func TestEventHashSurvivesTimeTruncation(t *testing.T) {
 	payload, err := NewTransactionCommitted(NewTransfer(

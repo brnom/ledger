@@ -75,9 +75,9 @@ func TestMigrateIsIdempotent(t *testing.T) {
 }
 
 // TestPayloadSurvivesRoundTrip is the reason event payloads are stored in a
-// json column rather than jsonb. jsonb normalizes the document -- reordering
-// keys, rewriting numbers -- and the event hash covers the exact bytes, so
-// storing them as jsonb would break the chain silently on read-back.
+// json column rather than jsonb. jsonb normalizes the document: it reorders
+// keys and rewrites numbers. The event hash covers the exact bytes. Payloads
+// stored as jsonb would therefore break the chain silently on read-back.
 func TestPayloadSurvivesRoundTrip(t *testing.T) {
 	store := pgstore.New(sharedPool(t))
 	ctx := context.Background()
@@ -91,8 +91,8 @@ func TestPayloadSurvivesRoundTrip(t *testing.T) {
 		if _, _, err := ledger.OpenAccount(ctx, app.OpenAccountCommand{
 			Name: name, Currency: brl, Normal: domain.Credit,
 			AllowNegative: name == "equity:opening-balances",
-			// Keys that would be reordered by jsonb, and a value with
-			// characters JSON has to escape.
+			// Keys that would be reordered by jsonb, and a value with characters JSON
+			// has to escape.
 			Metadata: map[string]string{
 				"zeta": "last", "alpha": "first", "mid": `quote" tab	 ação`,
 			},

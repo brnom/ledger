@@ -11,21 +11,21 @@ import (
 // Defaults for the window of business time the ledger accepts.
 const (
 	// DefaultBackdateLimit is how far into the past an entry may be dated.
-	// Backdating is a first-class operation -- a settlement file that arrives
-	// late describes money that moved days ago -- but an unbounded window
-	// makes every historical balance permanently provisional.
+	// Backdating is a first-class operation. A settlement file that arrives late
+	// describes money that moved days ago. An unbounded window, however, makes
+	// every historical balance permanently provisional.
 	DefaultBackdateLimit = 90 * 24 * time.Hour
 
-	// DefaultFutureLimit is how far ahead an entry may be dated. It defaults
-	// to clock skew only: forward-dated settlement is a deliberate feature
-	// that a ledger opts into with [WithFutureLimit], not something a caller
-	// should stumble into by sending a bad timestamp.
+	// DefaultFutureLimit is how far ahead an entry may be dated. It defaults to
+	// clock skew only. Forward-dated settlement is a deliberate feature that a
+	// ledger opts into with [WithFutureLimit]. A caller must not reach it by
+	// sending a bad timestamp.
 	DefaultFutureLimit = time.Minute
 )
 
 // Ledger is one book: a stream of events, the accounts they open, and the
-// balances they produce. It is safe for concurrent use; serialization happens
-// in the store, which admits one writer per ledger at a time.
+// balances they produce. It is safe for concurrent use. The store serializes
+// writes, and it admits one writer per ledger at a time.
 type Ledger struct {
 	store Store
 	id    string
@@ -96,9 +96,9 @@ func (ledger *Ledger) OpenAccount(ctx context.Context, cmd OpenAccountCommand) (
 			return err
 		}
 		if replayed {
-			// The retry gets the account the first call opened, not a fresh
-			// one, so a caller cannot tell a replay from the original except
-			// by Result.Replayed.
+			// The retry gets the account the first call opened, not a fresh one. A
+			// caller therefore cannot tell a replay from the original, except by
+			// Result.Replayed.
 			existing, _, err := writer.Account(cmd.Name)
 			acct = existing
 			return err
@@ -272,15 +272,15 @@ func (ledger *Ledger) Revert(ctx context.Context, cmd RevertCommand) (Result, er
 	return res, err
 }
 
-// admit checks a transaction against ledger state: every account exists, the
-// currencies line up, business time is within the accounts' lifetimes, and no
-// account that forbids it ends up overdrawn.
+// admit checks a transaction against ledger state. Every account exists. The
+// currencies agree. Business time is inside the accounts' lifetimes. No
+// account that forbids an overdraft ends up overdrawn.
 //
 // The overdraft check is made against each account's balance across everything
-// recorded, which is the balance a caller can spend today. It deliberately does
-// not verify that no intermediate historical balance went negative: a backdated
-// entry can make a past balance negative while the present one is healthy, and
-// refusing such an entry would make the ledger unable to record what actually
+// recorded, which is the balance a caller can spend today. It deliberately
+// does not check that every intermediate historical balance stayed positive. A
+// backdated entry can make a past balance negative while the present one is
+// healthy. A ledger that refused such an entry could not record what actually
 // happened.
 func (ledger *Ledger) admit(writer Writer, tx domain.Transaction) error {
 	deltas := make(map[domain.AccountName]domain.Amount, len(tx.Postings))
@@ -343,9 +343,8 @@ func (ledger *Ledger) admit(writer Writer, tx domain.Transaction) error {
 }
 
 // replayIdempotent reports whether the key has already produced a result. A
-// key seen with a different request is a conflict rather than a replay: two
-// different payments must never collapse into one because a caller reused a
-// key.
+// key seen with a different request is a conflict, not a replay. Two different
+// payments must never collapse into one because a caller reused a key.
 func (ledger *Ledger) replayIdempotent(writer Writer, key string, fingerprint [32]byte, res *Result) (bool, error) {
 	if key == "" {
 		return false, nil
@@ -399,8 +398,9 @@ func (ledger *Ledger) Balance(ctx context.Context, query domain.BalanceQuery) (d
 	return ledger.store.Balance(ctx, ledger.id, query)
 }
 
-// PresentedBalance returns a balance the way the account reads it: positive
-// when the account holds what it is meant to hold, whichever side it is on.
+// PresentedBalance returns a balance the way the account reads it. It is
+// positive when the account holds what it is meant to hold, whichever side it
+// is on.
 func (ledger *Ledger) PresentedBalance(ctx context.Context, query domain.BalanceQuery) (domain.Amount, error) {
 	acct, err := ledger.store.Account(ctx, ledger.id, query.Account)
 	if err != nil {

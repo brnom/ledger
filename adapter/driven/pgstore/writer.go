@@ -18,17 +18,17 @@ import (
 // single-writer lock through the enclosing transaction, so its reads and the
 // append that follows them cannot be interleaved with another writer.
 //
-// Effects are staged rather than written as they happen: reads fall back to
-// the staged overlay first and the database second, and flush writes the whole
-// batch at the end. That keeps a command to one round of writes and makes
-// "nothing happened" the natural outcome of an error.
+// Effects are staged rather than written as they happen. Reads consult the
+// staged overlay first and the database second. flush writes the whole batch
+// at the end. That keeps a command to one round of writes and makes "nothing
+// happened" the natural outcome of an error.
 type writer struct {
 	ledgerID string
 	tx       pgx.Tx
 	head     domain.Head
 
-	// ctx is the Update call's context. Holding one in a struct is normally a
-	// smell, but a writer exists only for the duration of that single call and
+	// ctx is the Update call's context. A context held in a struct is normally a
+	// smell. This writer exists only for the duration of that single call, and
 	// [app.Writer]'s methods take no context of their own.
 	ctx context.Context
 
@@ -86,9 +86,8 @@ func (w *writer) Balance(name domain.AccountName) (domain.Amount, error) {
 		return domain.Amount{}, fmt.Errorf("%w: %q", domain.ErrAccountNotFound, name)
 	}
 
-	// The running balance, not a sum over entries: an overdraft check happens
-	// on every write and must not get slower as an account accumulates
-	// history.
+	// The running balance, not a sum over entries: an overdraft check happens on
+	// every write and must not get slower as an account accumulates history.
 	var minor int64
 	err = w.tx.QueryRow(w.ctx,
 		`SELECT amount_minor FROM balances WHERE ledger_id = $1 AND account = $2`,
@@ -197,9 +196,9 @@ func (w *writer) StageIdempotency(rec domain.IdempotencyRecord) error {
 	return nil
 }
 
-// flush writes everything staged. It runs inside the caller's transaction, so
-// the events and the projections derived from them commit together or not at
-// all -- there is no window in which the log and the read model disagree.
+// flush writes everything staged. It runs inside the caller's transaction. The
+// events and the projections derived from them therefore commit together or
+// not at all. No window exists in which the log and the read model disagree.
 func (w *writer) flush(ctx context.Context) error {
 	if len(w.events) == 0 && len(w.idem) == 0 {
 		return nil

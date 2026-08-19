@@ -27,8 +27,8 @@ const problemBaseURI = "https://github.com/brnom/ledger/problems/"
 // single place the domain meets the protocol: handlers return errors and let
 // this decide what they mean on the wire.
 //
-// Order matters only in that each error is listed once; errors.Is walks the
-// wrapping chain, so a wrapped sentinel is found wherever it sits.
+// Order matters only in that each error appears once. errors.Is walks the
+// wrapping chain, so it finds a wrapped sentinel wherever the sentinel sits.
 var errorMap = []struct {
 	err    error
 	status int
@@ -43,8 +43,8 @@ var errorMap = []struct {
 	{domain.ErrAlreadyReverted, http.StatusConflict, "already-reverted", "Transaction already reverted"},
 	{domain.ErrIdempotencyConflict, http.StatusConflict, "idempotency-conflict", "Idempotency key reused with a different request"},
 
-	// Unprocessable rather than Bad Request: the request is well formed, but
-	// the ledger's state or rules do not admit it.
+	// Unprocessable rather than Bad Request: the request is well formed, but the
+	// ledger's state or rules do not admit it.
 	{domain.ErrInsufficientFunds, http.StatusUnprocessableEntity, "insufficient-funds", "Insufficient funds"},
 	{domain.ErrEffectiveOutOfRange, http.StatusUnprocessableEntity, "effective-out-of-range", "Effective time out of range"},
 	{domain.ErrOverflow, http.StatusUnprocessableEntity, "amount-overflow", "Amount out of range"},
@@ -91,11 +91,11 @@ func problemFor(err error) Problem {
 				Title:  mapping.title,
 				Status: mapping.status,
 			}
-			// Detail describes what the caller did wrong, so it belongs on a
-			// 4xx. At 5xx the cause is ours and the wrapped message can carry
-			// internals -- a sequence number, a constraint name, a driver
-			// error. The client still gets Type, which is all it needs to
-			// decide whether to retry; the cause goes to the log instead.
+			// Detail describes what the caller did wrong, so it belongs on a 4xx. At
+			// 5xx the cause is ours and the wrapped message can carry internals -- a
+			// sequence number, a constraint name, a driver error. The client still gets
+			// Type, which is all it needs in order to decide whether to retry. The
+			// cause goes to the log instead.
 			if mapping.status < 500 {
 				problem.Detail = err.Error()
 			}

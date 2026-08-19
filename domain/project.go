@@ -4,10 +4,10 @@ import "fmt"
 
 // Projection is what one event contributes to the read model.
 //
-// Every store applies events through this function, so the in-memory store and
-// the PostgreSQL store cannot drift apart in how they interpret the log -- and
-// rebuilding the read model from scratch is a fold of Project over the events,
-// not a second implementation that has to be kept in step.
+// Every store applies events through this function. That keeps the in-memory
+// store and the PostgreSQL store from drifting apart in how they read the log.
+// It also makes a rebuild of the read model a fold of Project over the events,
+// not a second implementation to keep in step.
 type Projection struct {
 	// Account is set by an account.opened event.
 	Account *Account

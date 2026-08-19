@@ -111,8 +111,8 @@ func TestOpenAccountAndRead(t *testing.T) {
 	if code != http.StatusCreated {
 		t.Fatalf("status = %d, want 201", code)
 	}
-	// The scale came from the currency table: a caller sending "BRL" should
-	// not have to know it means two decimal places.
+	// The scale came from the currency table: a caller sending "BRL" should not
+	// have to know it means two decimal places.
 	if created.Account.Scale != 2 || created.Account.Currency != "BRL" {
 		t.Errorf("account = %+v", created.Account)
 	}
@@ -175,7 +175,7 @@ func TestCommitAndBalance(t *testing.T) {
 	if code := client.do("GET", "/v1/accounts/liabilities:users:1/balance", "", nil, &balance); code != http.StatusOK {
 		t.Fatalf("balance status = %d", code)
 	}
-	// The holder sees what they hold; the signed value is what sums to zero
+	// The holder sees what they hold. The signed value is what sums to zero
 	// across the book.
 	if balance.Balance != "100.00" || balance.Signed != "-100.00" || balance.Currency != "BRL" {
 		t.Errorf("balance = %+v", balance)
@@ -541,9 +541,9 @@ func TestBodySizeLimit(t *testing.T) {
 // is a field, so a test can make one of them behave badly and leave the rest
 // alone.
 //
-// Its existence is the point of the port: the transport is exercisable with no
-// store, no database, and no events -- including on failures a real ledger will
-// not produce on demand.
+// This stub is the point of the port. The transport runs with no store, no
+// database, and no events. That includes failures a real ledger will not
+// produce on demand.
 type stubLedger struct {
 	id      string
 	commit  func(context.Context, app.CommitCommand) (app.Result, error)
@@ -613,8 +613,8 @@ func (s stubLedger) Verify(context.Context) (domain.Head, error) {
 var _ httpapi.Ledger = stubLedger{}
 
 // TestTransportRunsWithoutTheCore is what the driving port buys. Every case
-// here reaches a response with no store, no database and no event -- and two
-// of them exercise failures a real ledger will not produce to order.
+// here reaches a response with no store, no database, and no event. Two of
+// them exercise failures a real ledger will not produce to order.
 func TestTransportRunsWithoutTheCore(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -627,9 +627,9 @@ func TestTransportRunsWithoutTheCore(t *testing.T) {
 	}{
 		{
 			name: "a lost write race is reported as retryable",
-			// ErrConflict means another writer advanced the stream first. It is
-			// the one error whose HTTP mapping cannot be checked against a real
-			// ledger, because the single-writer lock exists to prevent it.
+			// ErrConflict means another writer advanced the stream first. It is the one
+			// error whose HTTP mapping cannot be checked against a real ledger, because
+			// the single-writer lock exists to prevent it.
 			stub: stubLedger{commit: func(context.Context, app.CommitCommand) (app.Result, error) {
 				return app.Result{}, domain.ErrConflict
 			}},
@@ -689,9 +689,9 @@ func TestTransportRunsWithoutTheCore(t *testing.T) {
 			if !strings.HasSuffix(problem.Type, tt.wantType) {
 				t.Errorf("type = %q, want a suffix of %q", problem.Type, tt.wantType)
 			}
-			// Detail belongs on a 4xx, where it tells the caller what they
-			// did wrong, and must be absent on a 5xx, where the cause is ours
-			// and the wrapped message can carry internals.
+			// Detail belongs on a 4xx, where it tells the caller what they did wrong.
+			// It must be absent on a 5xx, where the cause is ours and the wrapped
+			// message can carry internals.
 			switch {
 			case problem.Status >= 500 && problem.Detail != "":
 				t.Errorf("a server error leaked detail to the client: %q", problem.Detail)

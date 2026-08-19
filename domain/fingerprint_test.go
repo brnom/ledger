@@ -7,10 +7,10 @@ import (
 )
 
 // Command identity is what idempotency is built on, so it is pinned rather
-// than merely exercised. If one of these hashes changes, every idempotency key
-// already recorded stops matching its own command: a retry would be answered as
-// a new request, or a genuinely new request as a replay. The failure is meant
-// to be loud.
+// than merely exercised. A change to one of these hashes stops every recorded
+// idempotency key from matching its own command. The ledger would answer a
+// retry as a new request, or a genuinely new request as a replay. The failure
+// is meant to be loud.
 func TestFingerprintGolden(t *testing.T) {
 	brl := MustCurrency("BRL")
 	at := time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)
@@ -65,8 +65,8 @@ func TestFingerprintGolden(t *testing.T) {
 }
 
 // What the caller did not supply must not enter the fingerprint, or no retry
-// would ever match: the ledger fills in a transaction id and an effective time
-// when they are omitted, and those are different on every attempt.
+// would ever match. The ledger fills in a transaction id and an effective time
+// when the caller omits them. Those differ on every attempt.
 func TestFingerprintOmitsUnsetFields(t *testing.T) {
 	brl := MustCurrency("BRL")
 	postings := []Posting{

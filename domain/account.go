@@ -14,7 +14,7 @@ const MaxAccountNameLen = 255
 // or "assets:acquirer:cielo:receivable".
 //
 // The hierarchy is a naming convention the ledger preserves and can query by
-// prefix; it carries no accounting meaning of its own. Names are
+// prefix. It carries no accounting meaning of its own. Names are
 // case-sensitive, so "Users" and "users" are different accounts.
 type AccountName string
 
@@ -46,8 +46,8 @@ func (n AccountName) Validate() error {
 // Segments splits the name on ':'.
 func (n AccountName) Segments() []string { return strings.Split(string(n), ":") }
 
-// HasPrefix reports whether the name sits under the given hierarchy prefix.
-// It matches on segment boundaries, so "assets:cash" is under "assets" but
+// HasPrefix reports whether the name sits under the given hierarchy prefix. It
+// matches on segment boundaries, so "assets:cash" is under "assets" but
 // "assets_frozen:cash" is not.
 func (n AccountName) HasPrefix(prefix AccountName) bool {
 	if n == prefix {
@@ -60,7 +60,7 @@ func (n AccountName) String() string { return string(n) }
 
 // Normal is the side of the book an account increases on.
 //
-// Balances are stored signed and debit-positive throughout the engine; Normal
+// Balances are stored signed and debit-positive throughout the engine. Normal
 // exists so a balance can be shown the way its holder reads it. A customer
 // wallet is a liability of the operator, so it carries a credit balance
 // internally, yet the customer expects to see a positive number.
@@ -124,8 +124,8 @@ type Account struct {
 	Normal   Normal
 
 	// AllowNegative lets the balance go past zero in the account's normal
-	// direction. It is false for accounts that must not be overdrawn, such as
-	// a customer wallet, and true for the external and clearing accounts that
+	// direction. It is false for accounts that must not be overdrawn, such as a
+	// customer wallet. It is true for the external and clearing accounts that
 	// represent the other side of the world.
 	AllowNegative bool
 
