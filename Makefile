@@ -7,6 +7,7 @@ BIN         := $(CURDIR)/bin
 STATICCHECK := $(BIN)/staticcheck
 PKGS        ?= ./...
 FUZZTIME    ?= 30s
+FUZZMINTIME ?= 5s
 CHECKS      ?= 10000
 
 # Fuzz targets are discovered rather than listed, so a new FuzzXxx is picked up
@@ -14,6 +15,13 @@ CHECKS      ?= 10000
 # because `go test -fuzz` refuses to run against more than one package at a
 # time and the targets do not all live in the same one.
 FUZZ_TARGETS = $(shell grep -rE '^func Fuzz[A-Za-z0-9_]+' --include='*_test.go' . | sed -E 's,^\./([^:]+)/[^/:]+_test\.go:func (Fuzz[A-Za-z0-9_]+).*,./\1:\2,' | sort -u)
+
+# The property tests are discovered the same way and scoped to the packages
+# that have them. -rapid.checks is registered only by those test binaries, and
+# `go test` stops reading package arguments at the first flag it does not know
+# itself -- so the packages have to come before it, and handing the flag to a
+# binary that never registered it is an error.
+PROP_PKGS = $(shell grep -rlE '^func TestProperty' --include='*_test.go' . | xargs -n1 dirname | sort -u)
 
 .PHONY: help
 help: ## List available targets
@@ -49,7 +57,7 @@ race: ## Run unit tests under the race detector
 
 .PHONY: prop
 prop: ## Run the property tests hard
-	$(GO) test -run TestProperty -rapid.checks=$(CHECKS) $(PKGS)
+	$(GO) test $(PROP_PKGS) -run TestProperty -rapid.checks=$(CHECKS)
 
 .PHONY: cover
 cover: ## Run tests with coverage and print the total
@@ -57,11 +65,16 @@ cover: ## Run tests with coverage and print the total
 	$(GO) tool cover -func=coverage.out | tail -1
 
 .PHONY: fuzz
+# -fuzzminimizetime is capped well under -fuzztime on purpose. Minimizing a
+# newly interesting input is allowed to run long after the fuzzing deadline
+# passes, and the coordinator gives up waiting on it: "context deadline
+# exceeded", reported as a test failure with nothing actually wrong.
 fuzz: ## Run every fuzz target for FUZZTIME (default 30s each)
 	@for entry in $(FUZZ_TARGETS); do \
 		pkg=$${entry%%:*}; target=$${entry##*:}; \
 		echo "==> $$pkg $$target"; \
-		$(GO) test -run '^$$' -fuzz "^$$target$$" -fuzztime=$(FUZZTIME) $$pkg || exit 1; \
+		$(GO) test $$pkg -run '^$$' -fuzz "^$$target$$" \
+			-fuzztime=$(FUZZTIME) -fuzzminimizetime=$(FUZZMINTIME) || exit 1; \
 	done
 
 .PHONY: arch
